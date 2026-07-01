@@ -1,53 +1,42 @@
-﻿"""
+"""
 İŞKUR Şırnak İlan Takip Botu
-- Her 2 dakikada bir 5 sayfayı kontrol eder
-- Yeni ilan gelince Telegram bildirimi atar
+Selenium yerine requests + API/form post kullanır (Railway uyumlu)
 """
 
 import asyncio
 import json
 import os
 import logging
+import hashlib
 from datetime import datetime
+
+import requests
+from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait, Select
-from selenium.webdriver.support import expected_conditions as EC
 
 # ─────────────────────────────────────────────
-# AYARLAR
-# ─────────────────────────────────────────────
-TELEGRAM_TOKEN   = "8650054825:AAE9_yjdgQ6jujUUSFkD71_ptZaEONbON1I"
-TELEGRAM_CHAT_ID = "495947944"
-KONTROL_SURESI   = 120   # 2 dakika
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+KONTROL_SURESI   = 30   # 2 dakika
 KAYIT_DOSYASI    = "gorulmus_ilanlar.json"
 # ─────────────────────────────────────────────
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("bot.log", encoding="utf-8")
-    ]
+    handlers=[logging.StreamHandler()]
 )
 log = logging.getLogger(__name__)
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8",
+}
 
-def tarayici_ac():
-    opts = Options()
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    driver = webdriver.Chrome(options=opts)
-    driver.set_page_load_timeout(30)
-    return driver
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
 
 
 def gorulmus_yukle():
@@ -62,148 +51,148 @@ def gorulmus_kaydet(veri):
         json.dump(veri, f, ensure_ascii=False, indent=2)
 
 
-def tablo_satirlarini_cek(driver, tablo_css, kaynak):
-    """Genel tablo satırı okuyucu."""
-    ilanlar = []
+def hash_ilan(metin):
+    return hashlib.md5(metin.encode("utf-8")).hexdigest()[:12]
+
+
+def aspnet_viewstate(url):
+    """ASP.NET sayfasından __VIEWSTATE ve diğer hidden field'ları çeker."""
     try:
-        satirlar = driver.find_elements(By.CSS_SELECTOR, tablo_css + " tr")
-        for satir in satirlar[1:]:
-            hucreler = satir.find_elements(By.TAG_NAME, "td")
-            if len(hucreler) >= 2:
-                id_  = hucreler[0].text.strip()
-                ozet = " | ".join(h.text.strip() for h in hucreler if h.text.strip())
-                if id_:
-                    ilanlar.append({"id": id_, "baslik": ozet, "kaynak": kaynak})
+        r = SESSION.get(url, timeout=20)
+        soup = BeautifulSoup(r.text, "html.parser")
+        fields = {}
+        for inp in soup.find_all("input", type="hidden"):
+            name = inp.get("name", "")
+            if name:
+                fields[name] = inp.get("value", "")
+        return fields, soup
     except Exception as e:
-        log.warning(f"[{kaynak}] Tablo okuma hatası: {e}")
+        log.warning(f"ViewState alınamadı ({url}): {e}")
+        return {}, None
+
+
+def tablo_satirlari(soup):
+    """Sayfadaki tablodan satırları çeker."""
+    ilanlar = []
+    if not soup:
+        return ilanlar
+    for tablo in soup.find_all("table"):
+        satirlar = tablo.find_all("tr")
+        for satir in satirlar[1:]:
+            hucreler = satir.find_all("td")
+            if len(hucreler) >= 2:
+                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
+                if metin:
+                    ilanlar.append(metin)
     return ilanlar
 
 
-def il_sec_ve_ara(driver, wait, il_text="ŞIRNAK"):
-    """İl seçimi ve Ara butonu — birden fazla olası selector dener."""
-    # İl dropdown
-    for xpath in [
-        "//select[contains(@id,'Il') and not(contains(@id,'Ilce'))]",
-        "//select[contains(@id,'il') and not(contains(@id,'ilce'))]",
-        "//select[contains(@name,'Il')]",
-    ]:
-        try:
-            el = driver.find_element(By.XPATH, xpath)
-            Select(el).select_by_visible_text(il_text)
-            break
-        except Exception:
-            continue
-
-    # Ara butonu
-    for xpath in [
-        "//input[@value='Ara']",
-        "//input[contains(@id,'Search')]",
-        "//input[contains(@id,'Ara')]",
-        "//a[contains(@id,'Search')]",
-    ]:
-        try:
-            driver.find_element(By.XPATH, xpath).click()
-            break
-        except Exception:
-            continue
-
-    try:
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table")))
-    except Exception:
-        pass
-
-
 # ──────────────────────────────────────────────────────
-# 1) TYP — Toplum Yararına Program
+# 1) TYP
 # ──────────────────────────────────────────────────────
-def typ_cek(driver):
+def typ_cek():
     ilanlar = []
+    url = "https://esube.iskur.gov.tr/Typ/TypArama.aspx"
     try:
-        driver.get("https://esube.iskur.gov.tr/Typ/TypArama.aspx")
-        wait = WebDriverWait(driver, 20)
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
+        fields, soup = aspnet_viewstate(url)
+        if not fields:
+            return ilanlar
 
-        # TYP'de il alanı farklı id ile geliyor
-        for xpath in [
-            "//select[contains(@id,'ddlIl')]",
-            "//select[contains(@id,'Il')]",
-        ]:
-            try:
-                Select(driver.find_element(By.XPATH, xpath)).select_by_visible_text("ŞIRNAK")
+        # İl seçimi için dropdown name bul
+        il_field = None
+        for k in fields:
+            if "Il" in k and "Ilce" not in k:
+                il_field = k
                 break
-            except Exception:
-                continue
 
-        for xpath in ["//input[@value='Ara']", "//input[contains(@id,'Search')]"]:
-            try:
-                driver.find_element(By.XPATH, xpath).click()
+        # POST verisi
+        data = dict(fields)
+        if il_field:
+            # ŞIRNAK il kodunu bulmaya çalış
+            if soup:
+                select = soup.find("select", {"id": lambda x: x and "Il" in x and "Ilce" not in x})
+                if select:
+                    for opt in select.find_all("option"):
+                        if "IRNAK" in opt.text.upper():
+                            data[il_field] = opt["value"]
+                            break
+
+        # Ara butonu
+        for k in list(data.keys()):
+            if "Search" in k or "Ara" in k or "Button" in k.lower():
+                data[k] = "Ara"
                 break
-            except Exception:
-                continue
 
-        try:
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table")))
-        except Exception:
-            pass
-
-        ilanlar = tablo_satirlarini_cek(driver, "table", "TYP")
+        r = SESSION.post(url, data=data, timeout=20)
+        soup2 = BeautifulSoup(r.text, "html.parser")
+        satirlar = tablo_satirlari(soup2)
+        for s in satirlar:
+            if s:
+                ilanlar.append({"id": hash_ilan(s), "baslik": s, "kaynak": "TYP"})
     except Exception as e:
         log.warning(f"[TYP] Hata: {e}")
     return ilanlar
 
 
 # ──────────────────────────────────────────────────────
-# 2) İUP — İşgücü Uyum Programı
+# 2) IUP
 # ──────────────────────────────────────────────────────
-def iup_cek(driver):
+def iup_cek():
     ilanlar = []
+    url = "https://esube.iskur.gov.tr/Istihdam/IstIupArama.aspx"
     try:
-        driver.get("https://esube.iskur.gov.tr/Istihdam/IstIupArama.aspx")
-        wait = WebDriverWait(driver, 20)
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
-        il_sec_ve_ara(driver, wait)
-        ilanlar = tablo_satirlarini_cek(driver, "table", "IUP")
+        fields, soup = aspnet_viewstate(url)
+        if not fields:
+            return ilanlar
+
+        data = dict(fields)
+
+        if soup:
+            select = soup.find("select", {"id": lambda x: x and "Il" in x and "Ilce" not in x})
+            if select:
+                for opt in select.find_all("option"):
+                    if "IRNAK" in opt.text.upper():
+                        il_field = select.get("name") or select.get("id")
+                        if il_field:
+                            data[il_field] = opt["value"]
+                        break
+
+        r = SESSION.post(url, data=data, timeout=20)
+        soup2 = BeautifulSoup(r.text, "html.parser")
+        for s in tablo_satirlari(soup2):
+            ilanlar.append({"id": hash_ilan(s), "baslik": s, "kaynak": "IUP"})
     except Exception as e:
         log.warning(f"[IUP] Hata: {e}")
     return ilanlar
 
 
 # ──────────────────────────────────────────────────────
-# 3) İŞKUR Gençlik Programı
+# 3) Gençlik Programı
 # ──────────────────────────────────────────────────────
-def genclik_cek(driver):
+def genclik_cek():
     ilanlar = []
+    url = "https://esube.iskur.gov.tr/Istihdam/IstIskurGenclikProgramArama.aspx"
     try:
-        driver.get("https://esube.iskur.gov.tr/Istihdam/IstIskurGenclikProgramArama.aspx")
-        wait = WebDriverWait(driver, 20)
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
+        fields, soup = aspnet_viewstate(url)
+        if not fields:
+            return ilanlar
 
-        # "ŞIRNAK" veya "ŞIRNAK ÜNİVERSİTESİ" — ikisini de dene
-        for il_text in ["ŞIRNAK", "ŞIRNAK ÜNİVERSİTESİ"]:
-            for xpath in [
-                "//select[contains(@id,'Il') and not(contains(@id,'Ilce'))]",
-                "//select[contains(@id,'il') and not(contains(@id,'ilce'))]",
-            ]:
-                try:
-                    Select(driver.find_element(By.XPATH, xpath)).select_by_visible_text(il_text)
-                    break
-                except Exception:
-                    continue
+        data = dict(fields)
 
-            for xpath in ["//input[@value='Ara']", "//input[contains(@id,'Search')]"]:
-                try:
-                    driver.find_element(By.XPATH, xpath).click()
-                    break
-                except Exception:
-                    continue
+        if soup:
+            select = soup.find("select", {"id": lambda x: x and "Il" in x and "Ilce" not in x})
+            if select:
+                for opt in select.find_all("option"):
+                    if "IRNAK" in opt.text.upper():
+                        il_field = select.get("name") or select.get("id")
+                        if il_field:
+                            data[il_field] = opt["value"]
+                        break
 
-            try:
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table")))
-            except Exception:
-                pass
-
-            ilanlar += tablo_satirlarini_cek(driver, "table", f"Gençlik Programı ({il_text})")
-
+        r = SESSION.post(url, data=data, timeout=20)
+        soup2 = BeautifulSoup(r.text, "html.parser")
+        for s in tablo_satirlari(soup2):
+            ilanlar.append({"id": hash_ilan(s), "baslik": s, "kaynak": "Gençlik Programı"})
     except Exception as e:
         log.warning(f"[Gençlik] Hata: {e}")
     return ilanlar
@@ -212,27 +201,39 @@ def genclik_cek(driver):
 # ──────────────────────────────────────────────────────
 # 4) Açık İş İlanları (Kamu + Şırnak)
 # ──────────────────────────────────────────────────────
-def acik_is_cek(driver):
+def acik_is_cek():
     ilanlar = []
+    url = "https://esube.iskur.gov.tr/Istihdam/AcikIsIlanAra.aspx"
     try:
-        driver.get("https://esube.iskur.gov.tr/Istihdam/AcikIsIlanAra.aspx")
-        wait = WebDriverWait(driver, 20)
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
+        fields, soup = aspnet_viewstate(url)
+        if not fields:
+            return ilanlar
 
-        # İşyeri Türü: Kamu
-        for xpath in [
-            "//select[contains(@id,'IsyeriTuru')]",
-            "//select[contains(@id,'isyeriTuru')]",
-            "//select[contains(@id,'Tur')]",
-        ]:
-            try:
-                Select(driver.find_element(By.XPATH, xpath)).select_by_visible_text("KAMU")
-                break
-            except Exception:
-                continue
+        data = dict(fields)
 
-        il_sec_ve_ara(driver, wait)
-        ilanlar = tablo_satirlarini_cek(driver, "table", "Açık İş (Kamu-Şırnak)")
+        if soup:
+            # İşyeri türü: Kamu
+            for sel in soup.find_all("select"):
+                sel_id = sel.get("id", "") or sel.get("name", "")
+                if "Tur" in sel_id or "tur" in sel_id:
+                    for opt in sel.find_all("option"):
+                        if "KAMU" in opt.text.upper():
+                            data[sel.get("name") or sel_id] = opt["value"]
+                            break
+
+            # İl: Şırnak
+            for sel in soup.find_all("select"):
+                sel_id = sel.get("id", "") or sel.get("name", "")
+                if "Il" in sel_id and "Ilce" not in sel_id:
+                    for opt in sel.find_all("option"):
+                        if "IRNAK" in opt.text.upper():
+                            data[sel.get("name") or sel_id] = opt["value"]
+                            break
+
+        r = SESSION.post(url, data=data, timeout=20)
+        soup2 = BeautifulSoup(r.text, "html.parser")
+        for s in tablo_satirlari(soup2):
+            ilanlar.append({"id": hash_ilan(s), "baslik": s, "kaynak": "Açık İş (Kamu)"})
     except Exception as e:
         log.warning(f"[Açık İş] Hata: {e}")
     return ilanlar
@@ -241,41 +242,23 @@ def acik_is_cek(driver):
 # ──────────────────────────────────────────────────────
 # 5) Kurum Dışı Kamu İşçi Alım İlanları
 # ──────────────────────────────────────────────────────
-def kurumdisi_cek(driver):
+def kurumdisi_cek():
     ilanlar = []
+    url = ("https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/"
+           "?idId=sirnak&il=%C5%9E%C4%B1rnak")
     try:
-        driver.get(
-            "https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/"
-            "?idId=sirnak&il=%C5%9E%C4%B1rnak"
-        )
-        wait = WebDriverWait(driver, 20)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table, article, .list-group, .ilan")))
+        r = SESSION.get(url, timeout=20)
+        soup = BeautifulSoup(r.text, "html.parser")
 
-        # Tablo tabanlı
-        satirlar = driver.find_elements(By.CSS_SELECTOR, "table tr")
-        for satir in satirlar[1:]:
-            hucreler = satir.find_elements(By.TAG_NAME, "td")
-            if len(hucreler) >= 2:
-                id_  = hucreler[0].text.strip()
-                ozet = " | ".join(h.text.strip() for h in hucreler if h.text.strip())
-                if id_:
-                    ilanlar.append({"id": id_, "baslik": ozet, "kaynak": "Kurum Dışı Kamu"})
+        for s in tablo_satirlari(soup):
+            ilanlar.append({"id": hash_ilan(s), "baslik": s, "kaynak": "Kurum Dışı Kamu"})
 
-        # Tablo yoksa liste/article
         if not ilanlar:
-            for css in ["article", ".list-group-item", "li.ilan", ".ilan-item"]:
-                ogeler = driver.find_elements(By.CSS_SELECTOR, css)
-                for oge in ogeler:
-                    metin = oge.text.strip()
-                    if metin:
-                        ilanlar.append({
-                            "id": metin[:80],
-                            "baslik": metin,
-                            "kaynak": "Kurum Dışı Kamu"
-                        })
-                if ilanlar:
-                    break
-
+            for css in ["article", ".list-group-item", ".ilan-item", "li"]:
+                for el in soup.select(css):
+                    metin = el.get_text(strip=True)
+                    if metin and len(metin) > 20:
+                        ilanlar.append({"id": hash_ilan(metin), "baslik": metin[:300], "kaynak": "Kurum Dışı Kamu"})
     except Exception as e:
         log.warning(f"[Kurum Dışı] Hata: {e}")
     return ilanlar
@@ -288,8 +271,7 @@ async def bildirim_gonder(bot, ilan):
     mesaj = (
         f"🔔 *YENİ İŞKUR İLANI — ŞIRNAK*\n\n"
         f"📋 *Kaynak:* {ilan['kaynak']}\n"
-        f"🆔 *İlan No:* `{ilan['id']}`\n"
-        f"📌 *Detay:* {ilan['baslik'][:300]}\n"
+        f"📌 *Detay:* {ilan['baslik'][:400]}\n"
         f"🕐 *Tespit:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
     )
     await bot.send_message(
@@ -306,16 +288,12 @@ async def kontrol_et(bot, gorulmus):
     log.info("── Kontrol başlıyor ──")
     yeni = 0
 
-    driver = tarayici_ac()
-    try:
-        tum_ilanlar = []
-        tum_ilanlar += typ_cek(driver)
-        tum_ilanlar += iup_cek(driver)
-        tum_ilanlar += genclik_cek(driver)
-        tum_ilanlar += acik_is_cek(driver)
-        tum_ilanlar += kurumdisi_cek(driver)
-    finally:
-        driver.quit()
+    tum_ilanlar = []
+    tum_ilanlar += typ_cek()
+    tum_ilanlar += iup_cek()
+    tum_ilanlar += genclik_cek()
+    tum_ilanlar += acik_is_cek()
+    tum_ilanlar += kurumdisi_cek()
 
     for ilan in tum_ilanlar:
         if not ilan.get("id"):
@@ -327,7 +305,7 @@ async def kontrol_et(bot, gorulmus):
             log.info(f"YENİ → {anahtar}")
             try:
                 await bildirim_gonder(bot, ilan)
-                await asyncio.sleep(1)  # rate-limit koruması
+                await asyncio.sleep(1)
             except Exception as e:
                 log.error(f"Bildirim hatası: {e}")
 
@@ -343,7 +321,7 @@ async def main():
     await bot.send_message(
         chat_id=TELEGRAM_CHAT_ID,
         text=(
-            "✅ *İŞKUR Şırnak Takip Botu Başladı*\n\n"
+            "✅ *İŞKUR Şırnak Takip Botu Yeniden Başladı*\n\n"
             "Her 2 dakikada bir kontrol ediyorum:\n"
             "• TYP (Toplum Yararına Program)\n"
             "• İUP (İşgücü Uyum Programı)\n"
