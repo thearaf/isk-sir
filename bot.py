@@ -134,13 +134,20 @@ def typ_cek():
         if not soup:
             return ilanlar
 
-        il_field, il_val = il_kodu_bul(soup)
-        if il_field:
-            data[il_field] = il_val
+        # İl seç — ŞIRNAK
+        for sel in soup.find_all("select"):
+            opts = [o.text.strip() for o in sel.find_all("option")]
+            if "ŞIRNAK" in opts:
+                for opt in sel.find_all("option"):
+                    if "ŞIRNAK" in opt.text.strip():
+                        field_name = sel.get("name") or sel.get("id")
+                        if field_name:
+                            data[field_name] = opt.get("value", "")
+                        break
 
-        btn = ara_buton_adi(soup)
-        if btn:
-            data[btn] = "Ara"
+        # Ara butonu — __doPostBack
+        data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
+        data["__EVENTARGUMENT"] = ""
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
@@ -163,13 +170,29 @@ def iup_cek():
         if not soup:
             return ilanlar
 
-        il_field, il_val = il_kodu_bul(soup)
-        if il_field:
-            data[il_field] = il_val
+        # İl dropdown — "Başvuru Yapılacak İl"
+        for sel in soup.find_all("select"):
+            opts = [o.text.strip() for o in sel.find_all("option")]
+            if "ŞIRNAK" in opts:
+                for opt in sel.find_all("option"):
+                    if "ŞIRNAK" in opt.text.strip():
+                        field_name = sel.get("name") or sel.get("id")
+                        if field_name:
+                            data[field_name] = opt.get("value", "")
+                        break
 
-        btn = ara_buton_adi(soup)
-        if btn:
-            data[btn] = "Ara"
+        # Program Türü — İUP seç
+        for sel in soup.find_all("select"):
+            for opt in sel.find_all("option"):
+                if "İUP" in opt.text.upper() or "IUP" in opt.text.upper():
+                    field_name = sel.get("name") or sel.get("id")
+                    if field_name:
+                        data[field_name] = opt.get("value", "")
+                    break
+
+        # Ara butonu — __doPostBack ile çalışıyor
+        data["__EVENTTARGET"] = "ctl05$ctlCommandIupKayit$CommandItem_Search"
+        data["__EVENTARGUMENT"] = ""
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
