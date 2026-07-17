@@ -196,8 +196,12 @@ def iup_cek():
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        ilanlar = grid_satirlari_oku(soup2, "IUP")
-        log.info(f"[IUP] {len(ilanlar)} ilan bulundu")
+        tum = grid_satirlari_oku(soup2, "IUP")
+        # Şırnak filtresi — il seçimi çalışmazsa metin içinde ara
+        ilanlar = [i for i in tum if "IRNAK" in i["baslik"].upper()]
+        if not ilanlar:
+            ilanlar = tum  # filtre çalışmadıysa hepsini al
+        log.info(f"[IUP] {len(ilanlar)} ilan bulundu (toplam: {len(tum)})")
     except Exception as e:
         log.warning(f"[IUP] Hata: {e}")
     return ilanlar
