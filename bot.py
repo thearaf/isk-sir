@@ -198,6 +198,7 @@ def iup_cek():
         soup2 = BeautifulSoup(r.text, "html.parser")
         # Tüm tabloları tara — IUP tablosunun id'si farklı olabilir
         ilanlar = []
+        GECERSIZ = {"ara", "temizle", "ara | temizle", "search", "reset", ""}
         for tablo in soup2.find_all("table"):
             satirlar = tablo.find_all("tr")
             if len(satirlar) < 2:
@@ -206,9 +207,13 @@ def iup_cek():
                 hucreler = satir.find_all("td")
                 if len(hucreler) < 1:
                     continue
+                ilan_no = hucreler[0].get_text(strip=True)
+                # Geçersiz değerleri atla
+                if ilan_no.lower() in GECERSIZ:
+                    continue
+                # Sayısal veya anlamlı ilan numarası olmalı
                 metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
-                if metin and len(metin) > 2:
-                    ilan_no = hucreler[0].get_text(strip=True)
+                if metin and len(metin) > 3 and metin.lower() not in GECERSIZ:
                     ilanlar.append({
                         "id": ilan_no or metin[:40],
                         "baslik": metin[:400],
