@@ -1,10 +1,8 @@
 name: ISKUR Bot
-
 on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
-
 jobs:
   kontrol:
     runs-on: ubuntu-latest
@@ -14,17 +12,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - uses: actions/cache@v4
-        with:
-          path: gorulmus_ilanlar.json
-          key: cache-${{ github.run_id }}
-          restore-keys: gorulmus-cache
       - run: python bot.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: gorulmus_ilanlar.json
-          key: gorulmus-cache-${{ github.run_id }}
