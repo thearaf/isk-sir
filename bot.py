@@ -389,28 +389,8 @@ async def main():
     me = await bot.get_me()
     log.info(f"Bot bağlandı: @{me.username}")
 
-    await bot.send_message(
-        chat_id=TELEGRAM_CHAT_ID,
-        text=(
-            "✅ *İŞKUR Şırnak Takip Botu Başladı*\n\n"
-            "Her 30 saniyede bir kontrol ediyorum:\n"
-            "• TYP (Toplum Yararına Program)\n"
-            "• İUP (İşgücü Uyum Programı)\n"
-            "• İŞKUR Gençlik Programı\n"
-            "• Açık İş İlanları (Kamu)\n"
-            "• Kurum Dışı Kamu İşçi Alım İlanları"
-        ),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
     gorulmus = gorulmus_yukle()
-
-    while True:
-        try:
-            await kontrol_et(bot, gorulmus)
-        except Exception as e:
-            log.error(f"Beklenmeyen hata: {e}")
-        await asyncio.sleep(KONTROL_SURESI)
+    await kontrol_et(bot, gorulmus)
 
 
 if __name__ == "__main__":
