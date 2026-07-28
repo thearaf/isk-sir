@@ -395,7 +395,13 @@ async def main():
     log.info(f"Bot bağlandı: @{me.username}")
 
     gorulmus = gorulmus_yukle()
-    await kontrol_et(bot, gorulmus)
+
+    while True:
+        try:
+            await kontrol_et(bot, gorulmus)
+        except Exception as e:
+            log.error(f"Hata: {e}")
+        await asyncio.sleep(30)
 
 
 if __name__ == "__main__":
