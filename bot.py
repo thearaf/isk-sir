@@ -1,3 +1,17 @@
+"""
+İŞKUR Şırnak İlan Takip Botu
+requests + BeautifulSoup — Chrome gerektirmez
+"""
+
+import asyncio
+import json
+import os
+import logging
+import hashlib
+from datetime import datetime
+
+import requests
+from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
 
