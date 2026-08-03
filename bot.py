@@ -103,7 +103,7 @@ def il_kodu_bul(soup, il_adi):
         sel_id = sel.get("id", "") + sel.get("name", "")
         if "il" in sel_id.lower() and "ilce" not in sel_id.lower():
             for opt in sel.find_all("option"):
-                if il_adi in opt.text.upper():
+                if il_adi.upper() in opt.text.strip().upper():
                     return sel.get("name") or sel.get("id"), opt.get("value", "")
     return None, None
 
@@ -145,7 +145,7 @@ def ara_buton_adi(soup):
 
 
 # ──────────────────────────────────────────────────────
-# 1) TYP — her il için
+# 1) TYP — her il için (Harf Duyarlılığı Kaldırıldı)
 # ──────────────────────────────────────────────────────
 def typ_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -157,14 +157,12 @@ def typ_cek(il_adi, il_kisa, il_url):
             return ilanlar
 
         for sel in soup.find_all("select"):
-            opts = [o.text.strip() for o in sel.find_all("option")]
-            if il_adi in opts:
-                for opt in sel.find_all("option"):
-                    if il_adi in opt.text.strip():
-                        field_name = sel.get("name") or sel.get("id")
-                        if field_name:
-                            data[field_name] = opt.get("value", "")
-                        break
+            for opt in sel.find_all("option"):
+                if il_adi.upper() in opt.text.strip().upper():
+                    field_name = sel.get("name") or sel.get("id")
+                    if field_name:
+                        data[field_name] = opt.get("value", "")
+                    break
 
         data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
         data["__EVENTARGUMENT"] = ""
@@ -179,7 +177,7 @@ def typ_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 2) IUP — her il için
+# 2) IUP — her il için (Harf Duyarlılığı Kaldırıldı)
 # ──────────────────────────────────────────────────────
 def iup_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -191,14 +189,12 @@ def iup_cek(il_adi, il_kisa, il_url):
             return ilanlar
 
         for sel in soup.find_all("select"):
-            opts = [o.text.strip() for o in sel.find_all("option")]
-            if il_adi in opts:
-                for opt in sel.find_all("option"):
-                    if il_adi in opt.text.strip():
-                        field_name = sel.get("name") or sel.get("id")
-                        if field_name:
-                            data[field_name] = opt.get("value", "")
-                        break
+            for opt in sel.find_all("option"):
+                if il_adi.upper() in opt.text.strip().upper():
+                    field_name = sel.get("name") or sel.get("id")
+                    if field_name:
+                        data[field_name] = opt.get("value", "")
+                    break
 
         for sel in soup.find_all("select"):
             for opt in sel.find_all("option"):
@@ -396,7 +392,7 @@ async def kontrol_et(bot, gorulmus):
             continue
         anahtar = f"{ilan['kaynak']}::{ilan['id']}"
         if anahtar not in gorulmus:
-            # Önce hafızaya ve diske kaydet
+            # Önce hafızaya ve anında diske kaydet
             gorulmus[anahtar] = True
             gorulmus_kaydet(gorulmus)
             
@@ -404,7 +400,7 @@ async def kontrol_et(bot, gorulmus):
             log.info(f"YENİ → {anahtar}")
             try:
                 await bildirim_gonder(bot, ilan)
-                await asyncio.sleep(1.5)  # Telegram API limitine takılmamak için hafif bekleme
+                await asyncio.sleep(1.5)  # Telegram API sınırına takılmamak için hafif bekleme
             except Exception as e:
                 log.error(f"Bildirim hatası: {e}")
 
