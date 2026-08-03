@@ -1,6 +1,6 @@
 """
-İŞKUR Şırnak İlan Takip Botu
-requests + BeautifulSoup — Chrome gerektirmez
+İŞKUR Çok İl İlan Takip Botu
+Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman
 """
 
 import asyncio
@@ -20,6 +20,15 @@ TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 KONTROL_SURESI   = 30
 KAYIT_DOSYASI    = "/home/isk73/gorulmus_ilanlar.json"
+
+ILLER = [
+    ("ŞIRNAK",     "sirnak",     "%C5%9E%C4%B1rnak"),
+    ("DİYARBAKIR", "diyarbakir", "Diyarbak%C4%B1r"),
+    ("MARDİN",     "mardin",     "Mardin"),
+    ("SİİRT",      "siirt",      "Siirt"),
+    ("HAKKARİ",    "hakkari",    "Hakkari"),
+    ("BATMAN",     "batman",     "Batman"),
+]
 # ─────────────────────────────────────────────
 
 logging.basicConfig(
@@ -61,7 +70,6 @@ def session_ac():
 
 
 def viewstate_al(session, url):
-    """ASP.NET hidden field'larını çeker."""
     try:
         r = session.get(url, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
@@ -76,8 +84,7 @@ def viewstate_al(session, url):
         return {}, None, None
 
 
-def il_kodu_bul(soup, il_adi="ŞIRNAK"):
-    """Dropdown'dan il kodunu bulur."""
+def il_kodu_bul(soup, il_adi):
     for sel in soup.find_all("select"):
         sel_id = sel.get("id", "") + sel.get("name", "")
         if "il" in sel_id.lower() and "ilce" not in sel_id.lower():
@@ -88,9 +95,7 @@ def il_kodu_bul(soup, il_adi="ŞIRNAK"):
 
 
 def grid_satirlari_oku(soup, kaynak):
-    """Sadece sonuç GridView tablosundan satır okur."""
     ilanlar = []
-    # GridView ID'si genellikle "Grid" içerir
     for tablo in soup.find_all("table"):
         tablo_id = tablo.get("id", "")
         if "grid" not in tablo_id.lower() and "Grid" not in tablo_id:
@@ -113,7 +118,6 @@ def grid_satirlari_oku(soup, kaynak):
 
 
 def ara_buton_adi(soup):
-    """Ara butonunun name değerini bulur."""
     for inp in soup.find_all("input", {"type": ["submit", "button", "image"]}):
         val = inp.get("value", "")
         name = inp.get("name", "")
@@ -123,9 +127,9 @@ def ara_buton_adi(soup):
 
 
 # ──────────────────────────────────────────────────────
-# 1) TYP
+# 1) TYP — her il için
 # ──────────────────────────────────────────────────────
-def typ_cek():
+def typ_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Typ/TypArama.aspx"
     try:
@@ -134,34 +138,32 @@ def typ_cek():
         if not soup:
             return ilanlar
 
-        # İl seç — ŞIRNAK
         for sel in soup.find_all("select"):
             opts = [o.text.strip() for o in sel.find_all("option")]
-            if "ŞIRNAK" in opts:
+            if il_adi in opts:
                 for opt in sel.find_all("option"):
-                    if "ŞIRNAK" in opt.text.strip():
+                    if il_adi in opt.text.strip():
                         field_name = sel.get("name") or sel.get("id")
                         if field_name:
                             data[field_name] = opt.get("value", "")
                         break
 
-        # Ara butonu — __doPostBack
         data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
         data["__EVENTARGUMENT"] = ""
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        ilanlar = grid_satirlari_oku(soup2, "TYP")
-        log.info(f"[TYP] {len(ilanlar)} ilan bulundu")
+        ilanlar = grid_satirlari_oku(soup2, f"TYP-{il_adi}")
+        log.info(f"[TYP-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
-        log.warning(f"[TYP] Hata: {e}")
+        log.warning(f"[TYP-{il_adi}] Hata: {e}")
     return ilanlar
 
 
 # ──────────────────────────────────────────────────────
-# 2) IUP
+# 2) IUP — her il için
 # ──────────────────────────────────────────────────────
-def iup_cek():
+def iup_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/IstIupArama.aspx"
     try:
@@ -170,18 +172,16 @@ def iup_cek():
         if not soup:
             return ilanlar
 
-        # İl dropdown — "Başvuru Yapılacak İl"
         for sel in soup.find_all("select"):
             opts = [o.text.strip() for o in sel.find_all("option")]
-            if "ŞIRNAK" in opts:
+            if il_adi in opts:
                 for opt in sel.find_all("option"):
-                    if "ŞIRNAK" in opt.text.strip():
+                    if il_adi in opt.text.strip():
                         field_name = sel.get("name") or sel.get("id")
                         if field_name:
                             data[field_name] = opt.get("value", "")
                         break
 
-        # Program Türü — İUP seç
         for sel in soup.find_all("select"):
             for opt in sel.find_all("option"):
                 if "İUP" in opt.text.upper() or "IUP" in opt.text.upper():
@@ -190,45 +190,46 @@ def iup_cek():
                         data[field_name] = opt.get("value", "")
                     break
 
-        # Ara butonu — __doPostBack ile çalışıyor
         data["__EVENTTARGET"] = "ctl05$ctlCommandIupKayit$CommandItem_Search"
         data["__EVENTARGUMENT"] = ""
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        # Tüm tabloları tara — IUP tablosunun id'si farklı olabilir
-        ilanlar = []
-        GECERSIZ = {"ara", "temizle", "ara | temizle", "search", "reset", ""}
+
+        GECERSIZ = {"ara", "temizle", "ara | temizle", "search", "reset", "sec", "seç", ""}
         for tablo in soup2.find_all("table"):
             satirlar = tablo.find_all("tr")
             if len(satirlar) < 2:
                 continue
             for satir in satirlar[1:]:
                 hucreler = satir.find_all("td")
-                if len(hucreler) < 1:
+                if len(hucreler) < 2:
                     continue
-                ilan_no = hucreler[0].get_text(strip=True)
-                # Geçersiz değerleri atla
-                if ilan_no.lower() in GECERSIZ:
+                ilan_no = ""
+                for hucre in hucreler:
+                    val = hucre.get_text(strip=True)
+                    if val.isdigit():
+                        ilan_no = val
+                        break
+                if not ilan_no:
                     continue
-                # Sayısal veya anlamlı ilan numarası olmalı
-                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
-                if metin and len(metin) > 3 and metin.lower() not in GECERSIZ:
+                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True) and h.get_text(strip=True).lower() not in GECERSIZ)
+                if metin:
                     ilanlar.append({
-                        "id": ilan_no or metin[:40],
+                        "id": ilan_no,
                         "baslik": metin[:400],
-                        "kaynak": "IUP"
+                        "kaynak": f"IUP-{il_adi}"
                     })
-        log.info(f"[IUP] {len(ilanlar)} ilan bulundu")
+        log.info(f"[IUP-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
-        log.warning(f"[IUP] Hata: {e}")
+        log.warning(f"[IUP-{il_adi}] Hata: {e}")
     return ilanlar
 
 
 # ──────────────────────────────────────────────────────
-# 3) Gençlik Programı
+# 3) Gençlik — her il için
 # ──────────────────────────────────────────────────────
-def genclik_cek():
+def genclik_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/IstIskurGenclikProgramArama.aspx"
     try:
@@ -237,7 +238,7 @@ def genclik_cek():
         if not soup:
             return ilanlar
 
-        il_field, il_val = il_kodu_bul(soup)
+        il_field, il_val = il_kodu_bul(soup, il_adi)
         if il_field:
             data[il_field] = il_val
 
@@ -247,17 +248,17 @@ def genclik_cek():
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        ilanlar = grid_satirlari_oku(soup2, "Gençlik Programı")
-        log.info(f"[Gençlik] {len(ilanlar)} ilan bulundu")
+        ilanlar = grid_satirlari_oku(soup2, f"Gençlik-{il_adi}")
+        log.info(f"[Gençlik-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
-        log.warning(f"[Gençlik] Hata: {e}")
+        log.warning(f"[Gençlik-{il_adi}] Hata: {e}")
     return ilanlar
 
 
 # ──────────────────────────────────────────────────────
-# 4) Açık İş (Kamu + Şırnak)
+# 4) Açık İş (Kamu) — her il için
 # ──────────────────────────────────────────────────────
-def acik_is_cek():
+def acik_is_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/AcikIsIlanAra.aspx"
     try:
@@ -266,7 +267,6 @@ def acik_is_cek():
         if not soup:
             return ilanlar
 
-        # Kamu radio button — value genellikle "2" veya "K"
         for inp in soup.find_all("input", {"type": "radio"}):
             label = inp.find_next("label")
             label_text = label.get_text(strip=True) if label else ""
@@ -274,7 +274,7 @@ def acik_is_cek():
                 data[inp.get("name")] = inp.get("value", "")
                 break
 
-        il_field, il_val = il_kodu_bul(soup)
+        il_field, il_val = il_kodu_bul(soup, il_adi)
         if il_field:
             data[il_field] = il_val
 
@@ -284,26 +284,24 @@ def acik_is_cek():
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        ilanlar = grid_satirlari_oku(soup2, "Açık İş (Kamu)")
-        log.info(f"[Açık İş] {len(ilanlar)} ilan bulundu")
+        ilanlar = grid_satirlari_oku(soup2, f"Açık İş (Kamu)-{il_adi}")
+        log.info(f"[Açık İş-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
-        log.warning(f"[Açık İş] Hata: {e}")
+        log.warning(f"[Açık İş-{il_adi}] Hata: {e}")
     return ilanlar
 
 
 # ──────────────────────────────────────────────────────
-# 5) Kurum Dışı Kamu
+# 5) Kurum Dışı Kamu — her il için
 # ──────────────────────────────────────────────────────
-def kurumdisi_cek():
+def kurumdisi_cek(il_adi, il_kisa, il_url):
     ilanlar = []
-    url = ("https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/"
-           "?idId=sirnak&il=%C5%9E%C4%B1rnak")
+    url = f"https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/?idId={il_kisa}&il={il_url}"
     try:
         session = session_ac()
         r = session.get(url, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Tablo ara
         for tablo in soup.find_all("table"):
             satirlar = tablo.find_all("tr")
             if len(satirlar) < 2:
@@ -318,11 +316,10 @@ def kurumdisi_cek():
                             ilanlar.append({
                                 "id": hucreler[0].get_text(strip=True) or kisa_hash(metin),
                                 "baslik": metin[:400],
-                                "kaynak": "Kurum Dışı Kamu"
+                                "kaynak": f"Kurum Dışı-{il_adi}"
                             })
                 break
 
-        # Tablo yoksa article/li dene
         if not ilanlar:
             for css in ["article", ".list-item", ".ilan-item"]:
                 for el in soup.select(css):
@@ -331,12 +328,12 @@ def kurumdisi_cek():
                         ilanlar.append({
                             "id": kisa_hash(metin),
                             "baslik": metin[:400],
-                            "kaynak": "Kurum Dışı Kamu"
+                            "kaynak": f"Kurum Dışı-{il_adi}"
                         })
 
-        log.info(f"[Kurum Dışı] {len(ilanlar)} ilan bulundu")
+        log.info(f"[Kurum Dışı-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
-        log.warning(f"[Kurum Dışı] Hata: {e}")
+        log.warning(f"[Kurum Dışı-{il_adi}] Hata: {e}")
     return ilanlar
 
 
@@ -345,7 +342,7 @@ def kurumdisi_cek():
 # ──────────────────────────────────────────────────────
 async def bildirim_gonder(bot, ilan):
     mesaj = (
-        f"🔔 *YENİ İŞKUR İLANI — ŞIRNAK*\n\n"
+        f"🔔 *YENİ İŞKUR İLANI*\n\n"
         f"📋 *Kaynak:* {ilan['kaynak']}\n"
         f"📌 *Detay:* {ilan['baslik']}\n"
         f"🕐 *Tespit:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
@@ -365,11 +362,12 @@ async def kontrol_et(bot, gorulmus):
     yeni = 0
 
     tum_ilanlar = []
-    tum_ilanlar += typ_cek()
-    tum_ilanlar += iup_cek()
-    tum_ilanlar += genclik_cek()
-    tum_ilanlar += acik_is_cek()
-    tum_ilanlar += kurumdisi_cek()
+    for il_adi, il_kisa, il_url in ILLER:
+        tum_ilanlar += typ_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += iup_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += genclik_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += acik_is_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += kurumdisi_cek(il_adi, il_kisa, il_url)
 
     for ilan in tum_ilanlar:
         if not ilan.get("id"):
