@@ -144,7 +144,7 @@ def ara_buton_adi(soup):
 
 
 # ──────────────────────────────────────────────────────
-# 1) TYP — her il için (Çift Tetiklemeli / PostBack)
+# 1) TYP — her il için (İUP Mantığı ile Birebir Aynı)
 # ──────────────────────────────────────────────────────
 def typ_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -155,41 +155,49 @@ def typ_cek(il_adi, il_kisa, il_url):
         if not soup:
             return ilanlar
 
-        il_select_name = None
-        il_val = None
         for sel in soup.find_all("select"):
             for opt in sel.find_all("option"):
                 if il_adi.upper() in opt.text.strip().upper():
-                    il_select_name = sel.get("name") or sel.get("id")
-                    il_val = opt.get("value", "")
+                    field_name = sel.get("name") or sel.get("id")
+                    if field_name:
+                        data[field_name] = opt.get("value", "")
                     break
-            if il_select_name:
-                break
 
-        if not il_select_name or not il_val:
-            log.warning(f"[TYP-{il_adi}] İl kodu bulunamadı!")
-            return ilanlar
-
-        # 1. Aşama: İl seçimini gönder ve PostBack tetikle
-        data[il_select_name] = il_val
-        data["__EVENTTARGET"] = il_select_name
+        data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
         data["__EVENTARGUMENT"] = ""
 
-        r1 = session.post(url, data=data, timeout=15, cookies=cookies)
-        
-        # 2. Aşama: Yeni ViewState ile arama yap
-        data_ara, soup_postback, cookies_yeni = viewstate_al(session, url)
-        if not data_ara:
-            data_ara = data
-            
-        data_ara[il_select_name] = il_val
-        data_ara["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
-        data_ara["__EVENTARGUMENT"] = ""
+        r = session.post(url, data=data, timeout=15, cookies=cookies)
+        soup2 = BeautifulSoup(r.text, "html.parser")
 
-        r2 = session.post(url, data=data_ara, timeout=15, cookies=cookies_yeni or cookies)
-        soup2 = BeautifulSoup(r2.text, "html.parser")
-        
-        ilanlar = grid_satirlari_oku(soup2, f"TYP-{il_adi}")
+        GECERSIZ = {"ara", "temizle", "ara | temizle", "search", "reset", "sec", "seç", ""}
+        for tablo in soup2.find_all("table"):
+            satirlar = tablo.find_all("tr")
+            if len(satirlar) < 2:
+                continue
+            for satir in satirlar[1:]:
+                hucreler = satir.find_all("td")
+                if len(hucreler) < 2:
+                    continue
+                
+                ilan_no = ""
+                for hucre in hucreler:
+                    val = hucre.get_text(strip=True)
+                    if val.isdigit() and len(val) >= 4:
+                        ilan_no = val
+                        break
+                
+                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True) and h.get_text(strip=True).lower() not in GECERSIZ)
+                
+                if metin and len(metin) > 10:
+                    if not ilan_no:
+                        ilan_no = kisa_hash(metin)
+                    
+                    ilanlar.append({
+                        "id": ilan_no,
+                        "baslik": metin[:400],
+                        "kaynak": f"TYP-{il_adi}"
+                    })
+
         log.info(f"[TYP-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
         log.warning(f"[TYP-{il_adi}] Hata: {e}")
@@ -242,7 +250,7 @@ def iup_cek(il_adi, il_kisa, il_url):
                 ilan_no = ""
                 for hucre in hucreler:
                     val = hucre.get_text(strip=True)
-                    if val.isdigit():
+                    if val.isdigit() and len(val) >= 4:
                         ilan_no = val
                         break
                 if not ilan_no:
@@ -412,7 +420,6 @@ async def kontrol_et(bot, gorulmus):
             continue
         anahtar = f"{ilan['kaynak']}::{ilan['id']}"
         if anahtar not in gorulmus:
-            # Önce hafızaya ve anında diske kaydet
             gorulmus[anahtar] = True
             gorulmus_kaydet(gorulmus)
             
