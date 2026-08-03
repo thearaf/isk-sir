@@ -19,7 +19,7 @@ from telegram.constants import ParseMode
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 KONTROL_SURESI   = 30
-KAYIT_DOSYASI    = "gorulmus_ilanlar.json"
+KAYIT_DOSYASI    = "/home/isk73/gorulmus_ilanlar.json"
 # ─────────────────────────────────────────────
 
 logging.basicConfig(
