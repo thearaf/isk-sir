@@ -19,7 +19,10 @@ from telegram.constants import ParseMode
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 KONTROL_SURESI   = 30
-KAYIT_DOSYASI    = "/home/isk73/gorulmus_ilanlar.json"
+
+# Dosya yolunu bot.py ile aynı klasöre dinamik olarak bağlar
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+KAYIT_DOSYASI = os.path.join(BASE_DIR, "gorulmus_ilanlar.json")
 
 ILLER = [
     ("ŞIRNAK",     "sirnak",     "%C5%9E%C4%B1rnak"),
@@ -49,18 +52,29 @@ HEADERS = {
 
 def gorulmus_yukle():
     if os.path.exists(KAYIT_DOSYASI):
-        with open(KAYIT_DOSYASI, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(KAYIT_DOSYASI, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            log.error(f"Kayıt dosyası okunurken hata: {e}")
+            return {}
     return {}
 
 
 def gorulmus_kaydet(veri):
-    with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
-        json.dump(veri, f, ensure_ascii=False, indent=2)
+    try:
+        with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(veri, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())  # Veriyi anında diske yazmaya zorlar
+    except Exception as e:
+        log.error(f"Kayıt dosyasına yazılırken hata: {e}")
 
 
 def kisa_hash(metin):
-    return hashlib.md5(metin.encode()).hexdigest()[:10]
+    # Metindeki tüm boşlukları temizleyip hash alarak stabilite sağlar
+    temiz_metin = "".join(metin.split())
+    return hashlib.md5(temiz_metin.encode('utf-8')).hexdigest()[:12]
 
 
 def session_ac():
@@ -109,8 +123,12 @@ def grid_satirlari_oku(soup, kaynak):
                 continue
             metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
             if metin and len(metin) > 5:
+                ilan_id = hucreler[0].get_text(strip=True)
+                if not ilan_id or len(ilan_id) < 2:
+                    ilan_id = kisa_hash(metin)
+                
                 ilanlar.append({
-                    "id": hucreler[0].get_text(strip=True) or kisa_hash(metin),
+                    "id": ilan_id,
                     "baslik": metin[:400],
                     "kaynak": kaynak
                 })
@@ -313,8 +331,12 @@ def kurumdisi_cek(il_adi, il_kisa, il_url):
                     if len(hucreler) >= 2:
                         metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
                         if metin:
+                            ilan_id = hucreler[0].get_text(strip=True)
+                            if not ilan_id or len(ilan_id) < 2:
+                                ilan_id = kisa_hash(metin)
+                            
                             ilanlar.append({
-                                "id": hucreler[0].get_text(strip=True) or kisa_hash(metin),
+                                "id": ilan_id,
                                 "baslik": metin[:400],
                                 "kaynak": f"Kurum Dışı-{il_adi}"
                             })
@@ -355,7 +377,7 @@ async def bildirim_gonder(bot, ilan):
 
 
 # ──────────────────────────────────────────────────────
-# Ana döngü
+# Ana kontrol
 # ──────────────────────────────────────────────────────
 async def kontrol_et(bot, gorulmus):
     log.info("── Kontrol başlıyor ──")
@@ -374,16 +396,18 @@ async def kontrol_et(bot, gorulmus):
             continue
         anahtar = f"{ilan['kaynak']}::{ilan['id']}"
         if anahtar not in gorulmus:
+            # Önce hafızaya ve diske kaydet
             gorulmus[anahtar] = True
+            gorulmus_kaydet(gorulmus)
+            
             yeni += 1
             log.info(f"YENİ → {anahtar}")
             try:
                 await bildirim_gonder(bot, ilan)
-                await asyncio.sleep(1)
+                await asyncio.sleep(1.5)  # Telegram API limitine takılmamak için hafif bekleme
             except Exception as e:
                 log.error(f"Bildirim hatası: {e}")
 
-    gorulmus_kaydet(gorulmus)
     log.info(f"Tamamlandı. Yeni: {yeni} | Toplam: {len(gorulmus)}")
 
 
@@ -399,7 +423,7 @@ async def main():
             await kontrol_et(bot, gorulmus)
         except Exception as e:
             log.error(f"Hata: {e}")
-        await asyncio.sleep(30)
+        await asyncio.sleep(KONTROL_SURESI)
 
 
 if __name__ == "__main__":
