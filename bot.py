@@ -72,7 +72,6 @@ def gorulmus_kaydet(veri):
 
 
 def kisa_hash(metin):
-    # Metindeki tüm boşlukları temizleyip hash alarak stabilite sağlar
     temiz_metin = "".join(metin.split())
     return hashlib.md5(temiz_metin.encode('utf-8')).hexdigest()[:12]
 
@@ -145,7 +144,7 @@ def ara_buton_adi(soup):
 
 
 # ──────────────────────────────────────────────────────
-# 1) TYP — her il için (Harf Duyarlılığı Kaldırıldı)
+# 1) TYP — her il için (Çift Tetiklemeli / PostBack)
 # ──────────────────────────────────────────────────────
 def typ_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -156,19 +155,40 @@ def typ_cek(il_adi, il_kisa, il_url):
         if not soup:
             return ilanlar
 
+        il_select_name = None
+        il_val = None
         for sel in soup.find_all("select"):
             for opt in sel.find_all("option"):
                 if il_adi.upper() in opt.text.strip().upper():
-                    field_name = sel.get("name") or sel.get("id")
-                    if field_name:
-                        data[field_name] = opt.get("value", "")
+                    il_select_name = sel.get("name") or sel.get("id")
+                    il_val = opt.get("value", "")
                     break
+            if il_select_name:
+                break
 
-        data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
+        if not il_select_name or not il_val:
+            log.warning(f"[TYP-{il_adi}] İl kodu bulunamadı!")
+            return ilanlar
+
+        # 1. Aşama: İl seçimini gönder ve PostBack tetikle
+        data[il_select_name] = il_val
+        data["__EVENTTARGET"] = il_select_name
         data["__EVENTARGUMENT"] = ""
 
-        r = session.post(url, data=data, timeout=15, cookies=cookies)
-        soup2 = BeautifulSoup(r.text, "html.parser")
+        r1 = session.post(url, data=data, timeout=15, cookies=cookies)
+        
+        # 2. Aşama: Yeni ViewState ile arama yap
+        data_ara, soup_postback, cookies_yeni = viewstate_al(session, url)
+        if not data_ara:
+            data_ara = data
+            
+        data_ara[il_select_name] = il_val
+        data_ara["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
+        data_ara["__EVENTARGUMENT"] = ""
+
+        r2 = session.post(url, data=data_ara, timeout=15, cookies=cookies_yeni or cookies)
+        soup2 = BeautifulSoup(r2.text, "html.parser")
+        
         ilanlar = grid_satirlari_oku(soup2, f"TYP-{il_adi}")
         log.info(f"[TYP-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
@@ -177,7 +197,7 @@ def typ_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 2) IUP — her il için (Harf Duyarlılığı Kaldırıldı)
+# 2) IUP — her il için
 # ──────────────────────────────────────────────────────
 def iup_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -400,7 +420,7 @@ async def kontrol_et(bot, gorulmus):
             log.info(f"YENİ → {anahtar}")
             try:
                 await bildirim_gonder(bot, ilan)
-                await asyncio.sleep(1.5)  # Telegram API sınırına takılmamak için hafif bekleme
+                await asyncio.sleep(1.5)
             except Exception as e:
                 log.error(f"Bildirim hatası: {e}")
 
