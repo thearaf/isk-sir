@@ -76,6 +76,24 @@ def kisa_hash(metin):
     return hashlib.md5(temiz_metin.encode('utf-8')).hexdigest()[:12]
 
 
+def tr_norm(metin):
+    """Türkçe karakterleri büyük harf uyumlu hale getirir"""
+    if not metin:
+        return ""
+    replacements = [
+        ("i", "I"), ("İ", "I"), ("ı", "I"),
+        ("ş", "S"), ("Ş", "S"),
+        ("ğ", "G"), ("Ğ", "G"),
+        ("ü", "U"), ("Ü", "U"),
+        ("ö", "O"), ("Ö", "O"),
+        ("ç", "C"), ("Ç", "C")
+    ]
+    res = metin.upper()
+    for tr, en in replacements:
+        res = res.replace(tr, en)
+    return res
+
+
 def session_ac():
     s = requests.Session()
     s.headers.update(HEADERS)
@@ -98,11 +116,12 @@ def viewstate_al(session, url):
 
 
 def il_kodu_bul(soup, il_adi):
+    hedef = tr_norm(il_adi)
     for sel in soup.find_all("select"):
         sel_id = sel.get("id", "") + sel.get("name", "")
         if "il" in sel_id.lower() and "ilce" not in sel_id.lower():
             for opt in sel.find_all("option"):
-                if il_adi.upper() in opt.text.strip().upper():
+                if hedef in tr_norm(opt.text.strip()):
                     return sel.get("name") or sel.get("id"), opt.get("value", "")
     return None, None
 
@@ -144,7 +163,7 @@ def ara_buton_adi(soup):
 
 
 # ──────────────────────────────────────────────────────
-# 1) TYP — her il için (İUP Mantığı ile Birebir Aynı)
+# 1) TYP — her il için (Güncellenmiş & Güçlendirilmiş)
 # ──────────────────────────────────────────────────────
 def typ_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -155,9 +174,10 @@ def typ_cek(il_adi, il_kisa, il_url):
         if not soup:
             return ilanlar
 
+        hedef_il = tr_norm(il_adi)
         for sel in soup.find_all("select"):
             for opt in sel.find_all("option"):
-                if il_adi.upper() in opt.text.strip().upper():
+                if hedef_il in tr_norm(opt.text.strip()):
                     field_name = sel.get("name") or sel.get("id")
                     if field_name:
                         data[field_name] = opt.get("value", "")
@@ -165,6 +185,10 @@ def typ_cek(il_adi, il_kisa, il_url):
 
         data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
         data["__EVENTARGUMENT"] = ""
+
+        btn_name = ara_buton_adi(soup)
+        if btn_name:
+            data[btn_name] = "Ara"
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
@@ -216,9 +240,10 @@ def iup_cek(il_adi, il_kisa, il_url):
         if not soup:
             return ilanlar
 
+        hedef_il = tr_norm(il_adi)
         for sel in soup.find_all("select"):
             for opt in sel.find_all("option"):
-                if il_adi.upper() in opt.text.strip().upper():
+                if hedef_il in tr_norm(opt.text.strip()):
                     field_name = sel.get("name") or sel.get("id")
                     if field_name:
                         data[field_name] = opt.get("value", "")
