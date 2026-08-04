@@ -20,8 +20,7 @@ TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 KONTROL_SURESI   = 30
 
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
-KAYIT_DOSYASI = os.path.join(BASE_DIR, "gorulmus_ilanlar.json")
+KAYIT_DOSYASI = "/home/isk73/gorulmus_ilanlar.json"
 
 ILLER = [
     ("ŞIRNAK",     "sirnak",     "%C5%9E%C4%B1rnak"),
@@ -305,16 +304,15 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         if il_field:
             data[il_field] = il_val
 
-        # 2) Kamu Seçeneği (rdbIsyeriTuru)
+        # 2) Kamu Seçeneği
         for rad in soup.find_all("input", {"type": "radio"}):
             rad_name = rad.get("name", "")
             if "isyeri" in rad_name.lower() or "turu" in rad_name.lower():
                 data[rad_name] = "kamuRadio"
 
-        # 3) Bitiş Tetikleyicisi (Özel Tespitten Alınan İsim)
-       data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand$CommandItem_Search"
+        # 3) Ara Tetikleyicisi
+        data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand$CommandItem_Search"
         data["__EVENTARGUMENT"] = ""
-        data["ctl04$ctlAcikIsPageCommand_CommandItem_Search"] = "Ara"
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
