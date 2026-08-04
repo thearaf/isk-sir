@@ -1,5 +1,5 @@
 """
-İŞKUR Çok İl İlan Takip Botu
+İŞKUR Çok İl İlan Takip Botu - Tekrar Bildirim Korumalı Sürüm
 Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman
 """
 
@@ -7,7 +7,7 @@ import asyncio
 import json
 import os
 import logging
-import hashlib
+import re
 from datetime import datetime
 
 import requests
@@ -20,7 +20,6 @@ TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 KONTROL_SURESI   = 30
 
-# Dosya yolunu bot.py ile aynı klasöre dinamik olarak bağlar
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 KAYIT_DOSYASI = os.path.join(BASE_DIR, "gorulmus_ilanlar.json")
 
@@ -66,18 +65,12 @@ def gorulmus_kaydet(veri):
         with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
             json.dump(veri, f, ensure_ascii=False, indent=2)
             f.flush()
-            os.fsync(f.fileno())  # Veriyi anında diske yazmaya zorlar
+            os.fsync(f.fileno())
     except Exception as e:
         log.error(f"Kayıt dosyasına yazılırken hata: {e}")
 
 
-def kisa_hash(metin):
-    temiz_metin = "".join(metin.split())
-    return hashlib.md5(temiz_metin.encode('utf-8')).hexdigest()[:12]
-
-
 def tr_norm(metin):
-    """Türkçe karakterleri büyük harf uyumlu hale getirir"""
     if not metin:
         return ""
     replacements = [
@@ -126,33 +119,6 @@ def il_kodu_bul(soup, il_adi):
     return None, None
 
 
-def grid_satirlari_oku(soup, kaynak):
-    ilanlar = []
-    for tablo in soup.find_all("table"):
-        tablo_id = tablo.get("id", "")
-        if "grid" not in tablo_id.lower() and "Grid" not in tablo_id:
-            continue
-        satirlar = tablo.find_all("tr")
-        if len(satirlar) < 2:
-            continue
-        for satir in satirlar[1:]:
-            hucreler = satir.find_all("td")
-            if len(hucreler) < 2:
-                continue
-            metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
-            if metin and len(metin) > 5:
-                ilan_id = hucreler[0].get_text(strip=True)
-                if not ilan_id or len(ilan_id) < 2:
-                    ilan_id = kisa_hash(metin)
-                
-                ilanlar.append({
-                    "id": ilan_id,
-                    "baslik": metin[:400],
-                    "kaynak": kaynak
-                })
-    return ilanlar
-
-
 def ara_buton_adi(soup):
     for inp in soup.find_all("input", {"type": ["submit", "button", "image"]}):
         val = inp.get("value", "")
@@ -162,8 +128,14 @@ def ara_buton_adi(soup):
     return None
 
 
+def metinden_id_uret(metin):
+    """Metindeki tüm özel karakterleri ve değişen alanları ayıklayıp sabit bir ID üretir"""
+    sabit = re.sub(r'[^a-zA-Z0-9çğıöşuÇĞİÖŞÜ]', '', metin.lower())
+    return sabit[:80]
+
+
 # ──────────────────────────────────────────────────────
-# 1) TYP — her il için (Güncellenmiş & Güçlendirilmiş)
+# 1) TYP — Sadece Gerçek İlan No
 # ──────────────────────────────────────────────────────
 def typ_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -212,10 +184,10 @@ def typ_cek(il_adi, il_kisa, il_url):
                 
                 metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True) and h.get_text(strip=True).lower() not in GECERSIZ)
                 
-                if metin and len(metin) > 10:
-                    if not ilan_no:
-                        ilan_no = kisa_hash(metin)
-                    
+                if not ilan_no:
+                    ilan_no = metinden_id_uret(metin)
+
+                if metin and ilan_no:
                     ilanlar.append({
                         "id": ilan_no,
                         "baslik": metin[:400],
@@ -229,7 +201,7 @@ def typ_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 2) IUP — her il için
+# 2) IUP — Sadece Gerçek İlan No
 # ──────────────────────────────────────────────────────
 def iup_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -272,16 +244,20 @@ def iup_cek(il_adi, il_kisa, il_url):
                 hucreler = satir.find_all("td")
                 if len(hucreler) < 2:
                     continue
+                
                 ilan_no = ""
                 for hucre in hucreler:
                     val = hucre.get_text(strip=True)
                     if val.isdigit() and len(val) >= 4:
                         ilan_no = val
                         break
-                if not ilan_no:
-                    continue
+                        
                 metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True) and h.get_text(strip=True).lower() not in GECERSIZ)
-                if metin:
+                
+                if not ilan_no:
+                    ilan_no = metinden_id_uret(metin)
+
+                if metin and ilan_no:
                     ilanlar.append({
                         "id": ilan_no,
                         "baslik": metin[:400],
@@ -294,7 +270,7 @@ def iup_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 3) Gençlik — her il için
+# 3) Gençlik
 # ──────────────────────────────────────────────────────
 def genclik_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -315,7 +291,34 @@ def genclik_cek(il_adi, il_kisa, il_url):
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        ilanlar = grid_satirlari_oku(soup2, f"Gençlik-{il_adi}")
+        
+        for tablo in soup2.find_all("table"):
+            satirlar = tablo.find_all("tr")
+            if len(satirlar) < 2:
+                continue
+            for satir in satirlar[1:]:
+                hucreler = satir.find_all("td")
+                if len(hucreler) < 2:
+                    continue
+                
+                ilan_no = ""
+                for hucre in hucreler:
+                    val = hucre.get_text(strip=True)
+                    if val.isdigit() and len(val) >= 4:
+                        ilan_no = val
+                        break
+                        
+                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
+                
+                if not ilan_no:
+                    ilan_no = metinden_id_uret(metin)
+
+                if ilan_no and metin:
+                    ilanlar.append({
+                        "id": ilan_no,
+                        "baslik": metin[:400],
+                        "kaynak": f"Gençlik-{il_adi}"
+                    })
         log.info(f"[Gençlik-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
         log.warning(f"[Gençlik-{il_adi}] Hata: {e}")
@@ -323,7 +326,7 @@ def genclik_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 4) Açık İş (Kamu) — her il için
+# 4) Açık İş (Kamu)
 # ──────────────────────────────────────────────────────
 def acik_is_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -351,7 +354,34 @@ def acik_is_cek(il_adi, il_kisa, il_url):
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        ilanlar = grid_satirlari_oku(soup2, f"Açık İş (Kamu)-{il_adi}")
+        
+        for tablo in soup2.find_all("table"):
+            satirlar = tablo.find_all("tr")
+            if len(satirlar) < 2:
+                continue
+            for satir in satirlar[1:]:
+                hucreler = satir.find_all("td")
+                if len(hucreler) < 2:
+                    continue
+                
+                ilan_no = ""
+                for hucre in hucreler:
+                    val = hucre.get_text(strip=True)
+                    if val.isdigit() and len(val) >= 4:
+                        ilan_no = val
+                        break
+
+                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
+                
+                if not ilan_no:
+                    ilan_no = metinden_id_uret(metin)
+
+                if ilan_no and metin:
+                    ilanlar.append({
+                        "id": ilan_no,
+                        "baslik": metin[:400],
+                        "kaynak": f"Açık İş (Kamu)-{il_adi}"
+                    })
         log.info(f"[Açık İş-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
         log.warning(f"[Açık İş-{il_adi}] Hata: {e}")
@@ -359,7 +389,7 @@ def acik_is_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 5) Kurum Dışı Kamu — her il için
+# 5) Kurum Dışı Kamu (PDF / Link veya Sabit ID)
 # ──────────────────────────────────────────────────────
 def kurumdisi_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -378,29 +408,24 @@ def kurumdisi_cek(il_adi, il_kisa, il_url):
                 for satir in satirlar[1:]:
                     hucreler = satir.find_all("td")
                     if len(hucreler) >= 2:
+                        link = satir.find("a", href=True)
+                        ilan_id = ""
+                        if link:
+                            href = link["href"].strip()
+                            ilan_id = href.split("/")[-1].split("?")[0]
+
                         metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
-                        if metin:
-                            ilan_id = hucreler[0].get_text(strip=True)
-                            if not ilan_id or len(ilan_id) < 2:
-                                ilan_id = kisa_hash(metin)
-                            
+
+                        if not ilan_id or len(ilan_id) < 3:
+                            ilan_id = metinden_id_uret(metin)
+
+                        if metin and ilan_id:
                             ilanlar.append({
                                 "id": ilan_id,
                                 "baslik": metin[:400],
                                 "kaynak": f"Kurum Dışı-{il_adi}"
                             })
                 break
-
-        if not ilanlar:
-            for css in ["article", ".list-item", ".ilan-item"]:
-                for el in soup.select(css):
-                    metin = el.get_text(strip=True)
-                    if metin and len(metin) > 20:
-                        ilanlar.append({
-                            "id": kisa_hash(metin),
-                            "baslik": metin[:400],
-                            "kaynak": f"Kurum Dışı-{il_adi}"
-                        })
 
         log.info(f"[Kurum Dışı-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
@@ -443,6 +468,7 @@ async def kontrol_et(bot, gorulmus):
     for ilan in tum_ilanlar:
         if not ilan.get("id"):
             continue
+        
         anahtar = f"{ilan['kaynak']}::{ilan['id']}"
         if anahtar not in gorulmus:
             gorulmus[anahtar] = True
