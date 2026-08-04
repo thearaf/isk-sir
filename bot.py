@@ -1,5 +1,5 @@
 """
-İŞKUR Çok İl İlan Takip Botu - Hatalı Bildirim Korumalı Sürüm
+İŞKUR Çok İl İlan Takip Botu - Tam İlan Yakalama Sürümü
 Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman
 """
 
@@ -134,7 +134,7 @@ def ara_buton_adi(soup):
 
 
 def metin_gecerli_mi(metin):
-    if not metin or len(metin.strip()) < 10:
+    if not metin or len(metin.strip()) < 8:
         return False
     metin_lower = metin.lower()
     for gecer_metin in GECERSIZ_METINLER:
@@ -179,25 +179,20 @@ def typ_cek(il_adi, il_kisa, il_url):
             if len(satirlar) < 2:
                 continue
             for satir in satirlar[1:]:
-                if satir.find("th"):  # Başlık satırını atla
+                if satir.find("th"):
                     continue
                 hucreler = satir.find_all("td")
                 if len(hucreler) < 2:
                     continue
                 
-                ilan_no = ""
-                for hucre in hucreler:
-                    val = hucre.get_text(strip=True)
-                    if val.isdigit() and len(val) >= 4:
-                        ilan_no = val
-                        break
+                satir_text = satir.get_text(separator=" ", strip=True)
+                ilan_match = re.search(r'\b\d{6,12}\b', satir_text)
+                ilan_no = ilan_match.group(0) if ilan_match else ""
 
-                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
-
-                if ilan_no and metin_gecerli_mi(metin):
+                if ilan_no and metin_gecerli_mi(satir_text):
                     ilanlar.append({
                         "id": ilan_no,
-                        "baslik": metin[:400],
+                        "baslik": satir_text[:400],
                         "kaynak": f"TYP-{il_adi}"
                     })
 
@@ -253,19 +248,14 @@ def iup_cek(il_adi, il_kisa, il_url):
                 if len(hucreler) < 2:
                     continue
                 
-                ilan_no = ""
-                for hucre in hucreler:
-                    val = hucre.get_text(strip=True)
-                    if val.isdigit() and len(val) >= 4:
-                        ilan_no = val
-                        break
+                satir_text = satir.get_text(separator=" ", strip=True)
+                ilan_match = re.search(r'\b\d{6,12}\b', satir_text)
+                ilan_no = ilan_match.group(0) if ilan_match else ""
 
-                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
-
-                if ilan_no and metin_gecerli_mi(metin):
+                if ilan_no and metin_gecerli_mi(satir_text):
                     ilanlar.append({
                         "id": ilan_no,
-                        "baslik": metin[:400],
+                        "baslik": satir_text[:400],
                         "kaynak": f"IUP-{il_adi}"
                     })
         log.info(f"[IUP-{il_adi}] {len(ilanlar)} ilan")
@@ -275,7 +265,7 @@ def iup_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 3) Gençlik (Düzeltilmiş)
+# 3) Gençlik
 # ──────────────────────────────────────────────────────
 def genclik_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -308,19 +298,14 @@ def genclik_cek(il_adi, il_kisa, il_url):
                 if len(hucreler) < 2:
                     continue
                 
-                ilan_no = ""
-                for hucre in hucreler:
-                    val = hucre.get_text(strip=True)
-                    if val.isdigit() and len(val) >= 4:
-                        ilan_no = val
-                        break
+                satir_text = satir.get_text(separator=" ", strip=True)
+                ilan_match = re.search(r'\b\d{6,12}\b', satir_text)
+                ilan_no = ilan_match.group(0) if ilan_match else ""
 
-                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
-
-                if ilan_no and metin_gecerli_mi(metin):
+                if ilan_no and metin_gecerli_mi(satir_text):
                     ilanlar.append({
                         "id": ilan_no,
-                        "baslik": metin[:400],
+                        "baslik": satir_text[:400],
                         "kaynak": f"Gençlik-{il_adi}"
                     })
         log.info(f"[Gençlik-{il_adi}] {len(ilanlar)} ilan")
@@ -330,7 +315,7 @@ def genclik_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 4) Açık İş Kamu (Düzeltilmiş)
+# 4) Açık İş Kamu (Ekran Görüntüsüne Özel Düzeltildi)
 # ──────────────────────────────────────────────────────
 def acik_is_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -359,32 +344,29 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
         
-        for tablo in soup2.find_all("table"):
-            satirlar = tablo.find_all("tr")
-            if len(satirlar) < 2:
-                continue
-            for satir in satirlar[1:]:
-                if satir.find("th"):
-                    continue
-                hucreler = satir.find_all("td")
-                if len(hucreler) < 2:
-                    continue
+        # Kart / Tablo Alanlarını Bul
+        for tablo in soup2.find_all(["table", "div"]):
+            # İlan kartı yapısı veya tablo satırı tespiti
+            text_content = tablo.get_text(separator=" ", strip=True)
+            
+            # Sayfadaki 00009726672 gibi İlan Numaralarını Regex ile Çek
+            ilan_match = re.search(r'\b0*\d{7,10}\b', text_content)
+            
+            if ilan_match and metin_gecerli_mi(text_content):
+                ilan_no = ilan_match.group(0)
                 
-                ilan_no = ""
-                for hucre in hucreler:
-                    val = hucre.get_text(strip=True)
-                    if val.isdigit() and len(val) >= 4:
-                        ilan_no = val
-                        break
-
-                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
-
-                if ilan_no and metin_gecerli_mi(metin):
+                # Zaten eklendiyse tekrar ekleme
+                if not any(x['id'] == ilan_no for x in ilanlar):
+                    # Başlık ve Detay Temizleme
+                    baslik_match = re.search(r'([A-Za-zÇĞİÖŞÜçğıöşü\s\(\)]+)\s+(BATMAN|ŞIRNAK|DİYARBAKIR|MARDİN|SİİRT|HAKKARİ)', text_content)
+                    temiz_metin = text_content[:300]
+                    
                     ilanlar.append({
                         "id": ilan_no,
-                        "baslik": metin[:400],
+                        "baslik": temiz_metin,
                         "kaynak": f"Açık İş (Kamu)-{il_adi}"
                     })
+
         log.info(f"[Açık İş-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
         log.warning(f"[Açık İş-{il_adi}] Hata: {e}")
@@ -392,7 +374,7 @@ def acik_is_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 5) Kurum Dışı Kamu (Düzeltilmiş)
+# 5) Kurum Dışı Kamu
 # ──────────────────────────────────────────────────────
 def kurumdisi_cek(il_adi, il_kisa, il_url):
     ilanlar = []
