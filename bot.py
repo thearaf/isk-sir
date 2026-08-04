@@ -312,7 +312,7 @@ def acik_is_cek(il_adi, il_kisa, il_url):
                 data[rad_name] = "kamuRadio"
 
         # 3) Bitiş Tetikleyicisi (Özel Tespitten Alınan İsim)
-        data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand_CommandItem_Search"
+       data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand$CommandItem_Search"
         data["__EVENTARGUMENT"] = ""
         data["ctl04$ctlAcikIsPageCommand_CommandItem_Search"] = "Ara"
 
