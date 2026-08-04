@@ -309,7 +309,7 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         for rad in soup.find_all("input", {"type": "radio"}):
             rad_name = rad.get("name", "")
             if "isyeri" in rad_name.lower() or "turu" in rad_name.lower():
-                data[rad_name] = "1"  # 1 = Kamu
+                data[rad_name] = "kamuRadio"
 
         # 3) Bitiş Tetikleyicisi (Özel Tespitten Alınan İsim)
         data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand_CommandItem_Search"
