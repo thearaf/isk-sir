@@ -1,5 +1,5 @@
 """
-İŞKUR Çok İl İlan Takip Botu - Tam İlan Yakalama Sürümü
+İŞKUR Çok İl İlan Takip Botu - ASP.NET PostBack Tam Fix Sürümü
 Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman
 """
 
@@ -128,7 +128,7 @@ def ara_buton_adi(soup):
     for inp in soup.find_all("input", {"type": ["submit", "button", "image"]}):
         val = inp.get("value", "")
         name = inp.get("name", "")
-        if "Ara" in val or "Search" in name or "Ara" in name:
+        if "Ara" in val or "Search" in name or "btnAra" in name:
             return name
     return None
 
@@ -181,10 +181,6 @@ def typ_cek(il_adi, il_kisa, il_url):
             for satir in satirlar[1:]:
                 if satir.find("th"):
                     continue
-                hucreler = satir.find_all("td")
-                if len(hucreler) < 2:
-                    continue
-                
                 satir_text = satir.get_text(separator=" ", strip=True)
                 ilan_match = re.search(r'\b\d{6,12}\b', satir_text)
                 ilan_no = ilan_match.group(0) if ilan_match else ""
@@ -244,10 +240,6 @@ def iup_cek(il_adi, il_kisa, il_url):
             for satir in satirlar[1:]:
                 if satir.find("th"):
                     continue
-                hucreler = satir.find_all("td")
-                if len(hucreler) < 2:
-                    continue
-                
                 satir_text = satir.get_text(separator=" ", strip=True)
                 ilan_match = re.search(r'\b\d{6,12}\b', satir_text)
                 ilan_no = ilan_match.group(0) if ilan_match else ""
@@ -294,10 +286,6 @@ def genclik_cek(il_adi, il_kisa, il_url):
             for satir in satirlar[1:]:
                 if satir.find("th"):
                     continue
-                hucreler = satir.find_all("td")
-                if len(hucreler) < 2:
-                    continue
-                
                 satir_text = satir.get_text(separator=" ", strip=True)
                 ilan_match = re.search(r'\b\d{6,12}\b', satir_text)
                 ilan_no = ilan_match.group(0) if ilan_match else ""
@@ -315,7 +303,7 @@ def genclik_cek(il_adi, il_kisa, il_url):
 
 
 # ──────────────────────────────────────────────────────
-# 4) Açık İş Kamu (Ekran Görüntüsüne Özel Düzeltildi)
+# 4) Açık İş Kamu (ASP.NET PostBack Fix)
 # ──────────────────────────────────────────────────────
 def acik_is_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -326,46 +314,45 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         if not soup:
             return ilanlar
 
+        # Kamu İşyeri Türü (rdbIsyeriTuru_1 = Kamu)
         for inp in soup.find_all("input", {"type": "radio"}):
-            label = inp.find_next("label")
-            label_text = label.get_text(strip=True) if label else ""
-            if "Kamu" in label_text or "KAMU" in label_text:
-                data[inp.get("name")] = inp.get("value", "")
+            val = inp.get("value", "")
+            if val == "1" or "Kamu" in (inp.find_next("label").get_text() if inp.find_next("label") else ""):
+                data[inp.get("name")] = val
                 break
 
+        # İl Seçimi
         il_field, il_val = il_kodu_bul(soup, il_adi)
         if il_field:
             data[il_field] = il_val
 
-        btn = ara_buton_adi(soup)
-        if btn:
-            data[btn] = "Ara"
+        # ASP.NET Buton ve Event Target Bilgileri
+        btn_name = ara_buton_adi(soup)
+        if btn_name:
+            data[btn_name] = "Ara"
+            data["__EVENTTARGET"] = btn_name.replace("$", ":") if "$" in btn_name else btn_name
+        else:
+            data["__EVENTTARGET"] = ""
+
+        data["__EVENTARGUMENT"] = ""
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        
-        # Kart / Tablo Alanlarını Bul
-        for tablo in soup2.find_all(["table", "div"]):
-            # İlan kartı yapısı veya tablo satırı tespiti
-            text_content = tablo.get_text(separator=" ", strip=True)
-            
-            # Sayfadaki 00009726672 gibi İlan Numaralarını Regex ile Çek
-            ilan_match = re.search(r'\b0*\d{7,10}\b', text_content)
-            
-            if ilan_match and metin_gecerli_mi(text_content):
-                ilan_no = ilan_match.group(0)
-                
-                # Zaten eklendiyse tekrar ekleme
-                if not any(x['id'] == ilan_no for x in ilanlar):
-                    # Başlık ve Detay Temizleme
-                    baslik_match = re.search(r'([A-Za-zÇĞİÖŞÜçğıöşü\s\(\)]+)\s+(BATMAN|ŞIRNAK|DİYARBAKIR|MARDİN|SİİRT|HAKKARİ)', text_content)
-                    temiz_metin = text_content[:300]
-                    
-                    ilanlar.append({
-                        "id": ilan_no,
-                        "baslik": temiz_metin,
-                        "kaynak": f"Açık İş (Kamu)-{il_adi}"
-                    })
+
+        # Metin veya HTML içerisindeki tüm ilan numaralarını yakala
+        html_content = r.text
+        ilan_nolari = set(re.findall(r'\b0*\d{7,10}\b', html_content))
+
+        for tablo in soup2.find_all(["table", "tr", "div"]):
+            txt = tablo.get_text(separator=" ", strip=True)
+            for num in ilan_nolari:
+                if num in txt and len(num) >= 7 and metin_gecerli_mi(txt):
+                    if not any(x['id'] == num for x in ilanlar):
+                        ilanlar.append({
+                            "id": num,
+                            "baslik": txt[:350],
+                            "kaynak": f"Açık İş (Kamu)-{il_adi}"
+                        })
 
         log.info(f"[Açık İş-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
@@ -407,7 +394,6 @@ def kurumdisi_cek(il_adi, il_kisa, il_url):
                             "baslik": metin[:400],
                             "kaynak": f"Kurum Dışı-{il_adi}"
                         })
-                break
 
         log.info(f"[Kurum Dışı-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
