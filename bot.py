@@ -23,12 +23,12 @@ KONTROL_SURESI   = 30
 KAYIT_DOSYASI = "/home/isk73/gorulmus_ilanlar.json"
 
 ILLER = [
-    ("ŞIRNAK",     "sirnak",     "%C5%9E%C4%B1rnak"),
-    ("DİYARBAKIR", "diyarbakir", "Diyarbak%C4%B1r"),
-    ("MARDİN",     "mardin",     "Mardin"),
-    ("SİİRT",      "siirt",      "Siirt"),
-    ("HAKKARİ",    "hakkari",    "Hakkari"),
-    ("BATMAN",     "batman",     "Batman"),
+    ("ŞIRNAK",     "sirnak",     "%C5%9E%C4%B1rnak",   "73"),
+    ("DİYARBAKIR", "diyarbakir", "Diyarbak%C4%B1r",    "21"),
+    ("MARDİN",     "mardin",     "Mardin",               "47"),
+    ("SİİRT",      "siirt",      "Siirt",                "56"),
+    ("HAKKARİ",    "hakkari",    "Hakkari",              "30"),
+    ("BATMAN",     "batman",     "Batman",               "72"),
 ]
 
 GECERSIZ_METINLER = [
@@ -299,10 +299,12 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         if not soup:
             return ilanlar
 
-        # 1) İl Parametresi
+       # 1) İl Parametresi
         il_field, il_val = il_kodu_bul(soup, il_adi)
         if il_field:
             data[il_field] = il_val
+        # Açık İş için il alanını direkt yaz
+        data["ctl04$ctlIl"] = il_val if il_val else ""
 
         # 2) Kamu Seçeneği
         for rad in soup.find_all("input", {"type": "radio"}):
