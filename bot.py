@@ -38,24 +38,53 @@ log = logging.getLogger(__name__)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "tr-TR,tr;q=0.9",
 }
 
 # ─────────────────────────────────────────────
-# YARDIMCI FONKSİYONLAR
+# FİLTRE VE YARDIMCI FONKSİYONLAR
 # ─────────────────────────────────────────────
+def is_valid_job_id(raw_id):
+    """
+    Sayı dizisinin gerçek bir ilan ID'si mi yoksa tarih/çöp veri mi olduğunu kontrol eder.
+    """
+    if not raw_id:
+        return False
+    clean = str(raw_id).strip().lstrip("0")
+    if not clean or len(clean) < 6 or len(clean) > 12:
+        return False
+    
+    # 1. YYYYMMDD Tarih Filtresi (örn: 20230320, 20240404, 20260808)
+    if len(clean) == 8 and clean.startswith(("201", "202", "203")):
+        return False
+        
+    # 2. DDMMYYYY Tarih Filtresi (örn: 04042024 -> 4042024 veya 20032023)
+    if len(clean) in (7, 8) and clean.endswith(("2020", "2021", "2022", "2023", "2024", "2025", "2026")):
+        return False
+
+    return True
+
+def id_temizle(raw_id):
+    return str(raw_id).strip().lstrip("0") if raw_id else ""
+
 def gorulmus_yukle():
     if os.path.exists(KAYIT_DOSYASI):
         try:
             with open(KAYIT_DOSYASI, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except: return {}
+        except Exception as e:
+            log.error(f"Kayıt dosyası okuma hatası: {e}")
+            return {}
     return {}
 
 def gorulmus_kaydet(veri):
-    with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
-        json.dump(veri, f, ensure_ascii=False, indent=2)
-        f.flush()
-        os.fdatasync(f.fileno())
+    try:
+        with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(veri, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fdatasync(f.fileno())
+    except Exception as e:
+        log.error(f"Kayıt dosyası yazma hatası: {e}")
 
 def tr_norm(metin):
     if not metin: return ""
@@ -75,12 +104,15 @@ def viewstate_al(session, url):
         soup = BeautifulSoup(r.text, "html.parser")
         data = {inp.get("name"): inp.get("value", "") for inp in soup.find_all("input", {"type": "hidden"}) if inp.get("name")}
         return data, soup, r.cookies
-    except: return {}, None, None
+    except Exception as e:
+        log.warning(f"ViewState hatası ({url}): {e}")
+        return {}, None, None
 
 def il_kodu_bul(soup, il_adi):
     hedef = tr_norm(il_adi)
     for sel in soup.find_all("select"):
-        if "il" in (sel.get("id", "") + sel.get("name", "")).lower() and "ilce" not in (sel.get("id", "") + sel.get("name", "")).lower():
+        sel_name = (sel.get("id", "") + sel.get("name", "")).lower()
+        if "il" in sel_name and "ilce" not in sel_name:
             for opt in sel.find_all("option"):
                 if hedef in tr_norm(opt.text.strip()):
                     return sel.get("name") or sel.get("id"), opt.get("value", "")
@@ -90,11 +122,8 @@ def metin_gecerli_mi(metin):
     if not metin or len(metin.strip()) < 8: return False
     return not any(g in metin.lower() for g in GECERSIZ_METINLER)
 
-def id_temizle(raw_id):
-    return str(raw_id).strip().lstrip("0") if raw_id else ""
-
 # ─────────────────────────────────────────────
-# TARAMA FONKSİYONLARI (Kısaltıldı, mantık aynı)
+# TARAMA MODÜLLERİ
 # ─────────────────────────────────────────────
 def typ_cek(il_adi, il_kisa, il_url):
     ilanlar = []
@@ -104,7 +133,6 @@ def typ_cek(il_adi, il_kisa, il_url):
         data, soup, cookies = viewstate_al(session, url)
         if not soup: return ilanlar
         
-        # İl seçimi
         for sel in soup.find_all("select"):
             for opt in sel.find_all("option"):
                 if tr_norm(il_adi) in tr_norm(opt.text.strip()):
@@ -117,10 +145,13 @@ def typ_cek(il_adi, il_kisa, il_url):
         for tablo in soup2.find_all("table"):
             for satir in tablo.find_all("tr")[1:]:
                 st = satir.get_text(separator=" ", strip=True)
-                m = re.search(r'\b\d{6,12}\b', st)
-                if m and metin_gecerli_mi(st):
-                    ilanlar.append({"id": id_temizle(m.group(0)), "baslik": st[:400], "kaynak": f"TYP-{il_adi}"})
-    except: pass
+                if metin_gecerli_mi(st):
+                    for cand in re.findall(r'\b\d{6,12}\b', st):
+                        if is_valid_job_id(cand):
+                            ilanlar.append({"id": id_temizle(cand), "baslik": st[:300], "kaynak": f"TYP-{il_adi}"})
+                            break
+    except Exception as e:
+        log.warning(f"[TYP-{il_adi}] Hata: {e}")
     return ilanlar
 
 def iup_cek(il_adi, il_kisa, il_url):
@@ -143,10 +174,13 @@ def iup_cek(il_adi, il_kisa, il_url):
         for tablo in soup2.find_all("table"):
             for satir in tablo.find_all("tr")[1:]:
                 st = satir.get_text(separator=" ", strip=True)
-                m = re.search(r'\b\d{6,12}\b', st)
-                if m and metin_gecerli_mi(st):
-                    ilanlar.append({"id": id_temizle(m.group(0)), "baslik": st[:400], "kaynak": f"IUP-{il_adi}"})
-    except: pass
+                if metin_gecerli_mi(st):
+                    for cand in re.findall(r'\b\d{6,12}\b', st):
+                        if is_valid_job_id(cand):
+                            ilanlar.append({"id": id_temizle(cand), "baslik": st[:300], "kaynak": f"IUP-{il_adi}"})
+                            break
+    except Exception as e:
+        log.warning(f"[IUP-{il_adi}] Hata: {e}")
     return ilanlar
 
 def genclik_cek(il_adi, il_kisa, il_url):
@@ -161,13 +195,17 @@ def genclik_cek(il_adi, il_kisa, il_url):
         data["__EVENTTARGET"] = "ctl05$ctlCommandGenclikKayit$CommandItem_Search"
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
+        
         for tablo in soup2.find_all("table"):
             for satir in tablo.find_all("tr")[1:]:
                 st = satir.get_text(separator=" ", strip=True)
-                m = re.search(r'\b\d{6,12}\b', st)
-                if m and metin_gecerli_mi(st):
-                    ilanlar.append({"id": id_temizle(m.group(0)), "baslik": st[:400], "kaynak": f"Gençlik-{il_adi}"})
-    except: pass
+                if metin_gecerli_mi(st):
+                    for cand in re.findall(r'\b\d{6,12}\b', st):
+                        if is_valid_job_id(cand):
+                            ilanlar.append({"id": id_temizle(cand), "baslik": st[:300], "kaynak": f"Gençlik-{il_adi}"})
+                            break
+    except Exception as e:
+        log.warning(f"[Gençlik-{il_adi}] Hata: {e}")
     return ilanlar
 
 def acik_is_cek(il_adi, il_kisa, il_url):
@@ -183,12 +221,34 @@ def acik_is_cek(il_adi, il_kisa, il_url):
             if "isyeri" in rad.get("name", "").lower(): data[rad.get("name")] = "1"
         data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand_CommandItem_Search"
         r = session.post(url, data=data, timeout=15, cookies=cookies)
-        html = r.text
-        nums = set(re.findall(r'\b0*\d{7,10}\b', html))
-        for num in nums:
-            if metin_gecerli_mi(html):
-                ilanlar.append({"id": id_temizle(num), "baslik": "Açık İş İlanı", "kaynak": f"Açık İş-{il_adi}"})
-    except: pass
+        soup2 = BeautifulSoup(r.text, "html.parser")
+        
+        for tablo in soup2.find_all("table"):
+            for satir in tablo.find_all("tr")[1:]:
+                st = satir.get_text(separator=" ", strip=True)
+                if not metin_gecerli_mi(st):
+                    continue
+                
+                ilan_no = ""
+                # Öncelik 1: Tıklanabilir linklerdeki ID (a href)
+                for a in satir.find_all("a"):
+                    for cand in re.findall(r'\b\d{6,12}\b', a.get('href', '') + " " + a.get_text()):
+                        if is_valid_job_id(cand):
+                            ilan_no = id_temizle(cand)
+                            break
+                    if ilan_no: break
+                
+                # Öncelik 2: Satır içi metindeki ID
+                if not ilan_no:
+                    for cand in re.findall(r'\b\d{6,12}\b', st):
+                        if is_valid_job_id(cand):
+                            ilan_no = id_temizle(cand)
+                            break
+
+                if ilan_no:
+                    ilanlar.append({"id": ilan_no, "baslik": st[:300], "kaynak": f"Açık İş-{il_adi}"})
+    except Exception as e:
+        log.warning(f"[Açık İş-{il_adi}] Hata: {e}")
     return ilanlar
 
 def kurumdisi_cek(il_adi, il_kisa, il_url):
@@ -203,15 +263,16 @@ def kurumdisi_cek(il_adi, il_kisa, il_url):
                 hucreler = satir.find_all("td")
                 if len(hucreler) >= 2:
                     link = satir.find("a", href=True)
-                    ilan_id = id_temizle(link["href"].split("/")[-1].split("?")[0]) if link else ""
+                    raw_id = link["href"].split("/")[-1].split("?")[0] if link else ""
                     metin = " | ".join(h.get_text(strip=True) for h in hucreler)
-                    if ilan_id and metin_gecerli_mi(metin):
-                        ilanlar.append({"id": ilan_id, "baslik": metin[:400], "kaynak": f"Kurum Dışı-{il_adi}"})
-    except: pass
+                    if is_valid_job_id(raw_id) and metin_gecerli_mi(metin):
+                        ilanlar.append({"id": id_temizle(raw_id), "baslik": metin[:300], "kaynak": f"Kurum Dışı-{il_adi}"})
+    except Exception as e:
+        log.warning(f"[Kurum Dışı-{il_adi}] Hata: {e}")
     return ilanlar
 
 # ─────────────────────────────────────────────
-# ANA ÇALIŞTIRICI
+# ANA ÇALIŞTIRICI (CRON JOB UYUMLU)
 # ─────────────────────────────────────────────
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
@@ -225,21 +286,37 @@ async def main():
         tum_ilanlar += acik_is_cek(il_adi, il_kisa, il_url)
         tum_ilanlar += kurumdisi_cek(il_adi, il_kisa, il_url)
 
+    # Aynı turda toplanan mükerrer ID'leri temizle
+    tekil_döngü = []
+    eklenen_id_set = set()
+    for item in tum_ilanlar:
+        i_id = item.get("id")
+        if i_id and i_id not in eklenen_id_set:
+            eklenen_id_set.add(i_id)
+            tekil_döngü.append(item)
+
     yeni = 0
-    for ilan in tum_ilanlar:
-        if ilan["id"] not in gorulmus:
-            gorulmus[ilan["id"]] = {"tarih": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-            log.info(f"YENİ İLAN: {ilan['id']} ({ilan['kaynak']})")
+    for ilan in tekil_döngü:
+        ilan_id = ilan["id"]
+        if ilan_id not in gorulmus:
+            # Anında RAM'e ekle
+            gorulmus[ilan_id] = {
+                "tarih": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "kaynak": ilan["kaynak"]
+            }
+            # Anında diske kaydet (Süreç aniden sonlansa bile kayıp yaşanmasın)
+            gorulmus_kaydet(gorulmus)
+            
+            log.info(f"YENİ İLAN: {ilan_id} ({ilan['kaynak']})")
             try:
                 mesaj = f"🔔 *YENİ İŞKUR İLANI*\n\n📋 *Kaynak:* {ilan['kaynak']}\n📌 *Detay:* {ilan['baslik']}"
                 await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
                 await asyncio.sleep(1)
                 yeni += 1
             except Exception as e:
-                log.error(f"Bildirim hatası: {e}")
+                log.error(f"Bildirim atma hatası ({ilan_id}): {e}")
     
-    gorulmus_kaydet(gorulmus)
-    log.info(f"İşlem tamamlandı. Yeni bulunan: {yeni}")
+    log.info(f"İşlem tamamlandı. Yeni bulunan: {yeni} | Toplam Hafıza: {len(gorulmus)}")
 
 if __name__ == "__main__":
     asyncio.run(main())
