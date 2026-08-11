@@ -18,18 +18,14 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "495947944")
 BASE_DIR      = "/home/isk73"
 KAYIT_DOSYASI = os.path.join(BASE_DIR, "gorulmus_ilanlar.json")
 
+# İŞKUR İl Kodları (Doğrudan İŞKUR Veritabanı ID'leri)
 ILLER = [
-    ("ŞIRNAK",     "sirnak",     "%C5%9E%C4%B1rnak"),
-    ("DİYARBAKIR", "diyarbakir", "Diyarbak%C4%B1r"),
-    ("MARDİN",     "mardin",     "Mardin"),
-    ("SİİRT",      "siirt",      "Siirt"),
-    ("HAKKARİ",    "hakkari",    "Hakkari"),
-    ("BATMAN",     "batman",     "Batman"),
-]
-
-GECERSIZ_METINLER = [
-    "kayıt bulunamamıştır", "kayit bulunamamistir", "sonuç bulunamadı", 
-    "sonuc bulunamadi", "veri bulunamadı", "arama kriterlerinize"
+    ("ŞIRNAK",     "73", "sirnak",     "%C5%9E%C4%B1rnak"),
+    ("DİYARBAKIR", "21", "diyarbakir", "Diyarbak%C4%B1r"),
+    ("MARDİN",     "47", "mardin",     "Mardin"),
+    ("SİİRT",      "56", "siirt",      "Siirt"),
+    ("HAKKARİ",    "30", "hakkari",    "Hakkari"),
+    ("BATMAN",     "72", "batman",     "Batman"),
 ]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -37,9 +33,8 @@ log = logging.getLogger(__name__)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Origin": "https://esube.iskur.gov.tr",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "tr-TR,tr;q=0.9",
     "Connection": "keep-alive",
 }
 
@@ -74,90 +69,79 @@ def gorulmus_kaydet(veri):
     except Exception as e:
         log.error(f"Hafıza yazma hatası: {e}")
 
-def tr_norm(metin):
-    if not metin: return ""
-    res = metin.upper()
-    for tr, en in [("i","I"), ("İ","I"), ("ı","I"), ("ş","S"), ("Ş","S"), ("ğ","G"), ("Ğ","G"), ("ü","U"), ("Ü","U"), ("ö","O"), ("Ö","O"), ("ç","C"), ("Ç","C")]:
-        res = res.replace(tr, en)
-    return res
-
-def session_ac():
-    s = requests.Session()
-    s.headers.update(HEADERS)
-    return s
-
-def viewstate_al(session, url):
-    try:
-        session.headers.update({"Referer": url})
-        r = session.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, "html.parser")
-        data = {inp.get("name"): inp.get("value", "") for inp in soup.find_all("input") if inp.get("name")}
-        return data, soup, r.cookies
-    except Exception as e:
-        log.warning(f"ViewState hatası ({url}): {e}")
-        return {}, None, None
-
-def il_kodu_bul(soup, il_adi):
-    hedef = tr_norm(il_adi)
-    for sel in soup.find_all("select"):
-        sel_name = sel.get("name", "")
-        for opt in sel.find_all("option"):
-            if hedef in tr_norm(opt.text.strip()) and opt.get("value"):
-                return sel_name, opt.get("value")
-    return None, None
-
+# ─────────────────────────────────────────────
+# KURUM DIŞI KAMU İŞÇİ ALIMI (GET İSTEĞİ)
+# ─────────────────────────────────────────────
 def kurumdisi_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = f"https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/?idId={il_kisa}&il={il_url}"
     try:
-        session = session_ac()
-        r = session.get(url, timeout=15)
+        r = requests.get(url, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
         for a in soup.find_all("a", href=True):
             if "kurumdisi-kamu-isci-alim-ilanlari" in a["href"]:
-                raw_id = a["href"].split("/")[-1].split("?")[0]
+                parts = a["href"].rstrip("/").split("/")
+                raw_id = parts[-1].split("?")[0]
                 metin = a.get_text(strip=True)
-                if is_valid_job_id(raw_id) and len(metin) > 5:
-                    ilanlar.append({"id": id_temizle(raw_id), "baslik": metin[:300], "kaynak": f"Kurum Dışı-{il_adi}"})
+                if is_valid_job_id(raw_id) and len(metin) > 3:
+                    ilanlar.append({
+                        "id": id_temizle(raw_id),
+                        "baslik": metin[:300],
+                        "kaynak": f"Kurum Dışı Kamu-{il_adi}"
+                    })
     except Exception as e:
         log.warning(f"[Kurum Dışı-{il_adi}] Hata: {e}")
     return ilanlar
 
-def acik_is_cek(il_adi, il_kisa, il_url):
+# ─────────────────────────────────────────────
+# AÇIK İŞ İLANLARI (POSTBACK SİMÜLASYONU)
+# ─────────────────────────────────────────────
+def acik_is_cek(il_adi, il_kod):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/AcikIsIlanAra.aspx"
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    
     try:
-        session = session_ac()
-        data, soup, cookies = viewstate_al(session, url)
-        if not soup: return ilanlar
-
-        il_field, il_val = il_kodu_bul(soup, il_adi)
-        if il_field and il_val:
-            data[il_field] = il_val
-
-        # EventTarget simülasyonu
-        data["__EVENTTARGET"] = il_field if il_field else "ctl04$ctlAcikIsPageCommand_CommandItem_Search"
-        data["__EVENTARGUMENT"] = ""
-
-        r = session.post(url, data=data, timeout=15, cookies=cookies)
+        # 1. Ana Sayfayı Çek
+        r1 = session.get(url, timeout=15)
+        soup1 = BeautifulSoup(r1.text, "html.parser")
         
-        # HTML içindeki tüm ilan linklerini doğrudan Regex ile yakala
-        ids = set(re.findall(r'IlanDetay\.aspx\?IlanId=(\d+)', r.text))
-        for i_id in ids:
+        # Hidden input alanlarını topla
+        data = {inp.get("name"): inp.get("value", "") for inp in soup1.find_all("input", {"type": "hidden"}) if inp.get("name")}
+        
+        # İl Seçim Parametresini ve Arama Butonunu Ayarla
+        data["ctl00$ContentPlaceHolder1$ddlIl"] = il_kod
+        data["ctl00$ContentPlaceHolder1$btnAra"] = "Ara"
+        
+        # 2. Arama POST İsteği Gönder
+        session.headers.update({"Referer": url})
+        r2 = session.post(url, data=data, timeout=15)
+        
+        # Regex ile sayfadaki tüm İlan Numaralarını Yakala
+        matches = re.findall(r'IlanId=(\d+)', r2.text)
+        for i_id in set(matches):
             if is_valid_job_id(i_id):
-                ilanlar.append({"id": id_temizle(i_id), "baslik": f"İŞKUR Açık İş İlanı No: {i_id}", "kaynak": f"Açık İş-{il_adi}"})
+                ilanlar.append({
+                    "id": id_temizle(i_id),
+                    "baslik": f"{il_adi} İŞKUR Açık İş İlanı No: {i_id}",
+                    "kaynak": f"Açık İş-{il_adi}"
+                })
     except Exception as e:
         log.warning(f"[Açık İş-{il_adi}] Hata: {e}")
     return ilanlar
 
+# ─────────────────────────────────────────────
+# ANA DÖNGÜ
+# ─────────────────────────────────────────────
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
     gorulmus = gorulmus_yukle()
     tum_ilanlar = []
 
-    for il_adi, il_kisa, il_url in ILLER:
+    for il_adi, il_kod, il_kisa, il_url in ILLER:
         tum_ilanlar += kurumdisi_cek(il_adi, il_kisa, il_url)
-        tum_ilanlar += acik_is_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += acik_is_cek(il_adi, il_kod)
 
     tekil_list = []
     eklenen = set()
