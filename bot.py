@@ -1,174 +1,426 @@
+"""
+İŞKUR Çok İl İlan Takip Botu
+Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman
+"""
+
 import asyncio
 import json
 import os
 import logging
-import re
+import hashlib
 from datetime import datetime
+
 import requests
 from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
 
 # ─────────────────────────────────────────────
-# AYARLAR
-# ─────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8650054825:AAE9_yjdgQ6jujUUSFkD71_ptZaEONbON1I")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "495947944")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+KONTROL_SURESI   = 30
 
-BASE_DIR      = "/home/isk73"
+# Dosya yolunu bot.py ile aynı klasöre dinamik olarak bağlar
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 KAYIT_DOSYASI = os.path.join(BASE_DIR, "gorulmus_ilanlar.json")
 
-# İŞKUR İl Kodları (Doğrudan İŞKUR Veritabanı ID'leri)
 ILLER = [
-    ("ŞIRNAK",     "73", "sirnak",     "%C5%9E%C4%B1rnak"),
-    ("DİYARBAKIR", "21", "diyarbakir", "Diyarbak%C4%B1r"),
-    ("MARDİN",     "47", "mardin",     "Mardin"),
-    ("SİİRT",      "56", "siirt",      "Siirt"),
-    ("HAKKARİ",    "30", "hakkari",    "Hakkari"),
-    ("BATMAN",     "72", "batman",     "Batman"),
+    ("ŞIRNAK",     "sirnak",     "%C5%9E%C4%B1rnak"),
+    ("DİYARBAKIR", "diyarbakir", "Diyarbak%C4%B1r"),
+    ("MARDİN",     "mardin",     "Mardin"),
+    ("SİİRT",      "siirt",      "Siirt"),
+    ("HAKKARİ",    "hakkari",    "Hakkari"),
+    ("BATMAN",     "batman",     "Batman"),
 ]
+# ─────────────────────────────────────────────
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 log = logging.getLogger(__name__)
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "tr-TR,tr;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
 }
 
-def is_valid_job_id(raw_id):
-    if not raw_id: return False
-    clean = str(raw_id).strip().lstrip("0")
-    return bool(clean and 6 <= len(clean) <= 12)
-
-def id_temizle(raw_id):
-    return str(raw_id).strip().lstrip("0") if raw_id else ""
 
 def gorulmus_yukle():
     if os.path.exists(KAYIT_DOSYASI):
         try:
             with open(KAYIT_DOSYASI, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                log.info(f"Hafıza başarıyla yüklendi. Kayıtlı ilan sayısı: {len(data)}")
-                return data
+                return json.load(f)
         except Exception as e:
-            log.error(f"Hafıza dosyası okunamadı: {e}")
+            log.error(f"Kayıt dosyası okunurken hata: {e}")
             return {}
     return {}
 
+
 def gorulmus_kaydet(veri):
-    gecici = KAYIT_DOSYASI + ".tmp"
     try:
-        with open(gecici, "w", encoding="utf-8") as f:
+        with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
             json.dump(veri, f, ensure_ascii=False, indent=2)
             f.flush()
-            os.fsync(f.fileno())
-        os.replace(gecici, KAYIT_DOSYASI)
+            os.fsync(f.fileno())  # Veriyi anında diske yazmaya zorlar
     except Exception as e:
-        log.error(f"Hafıza yazma hatası: {e}")
+        log.error(f"Kayıt dosyasına yazılırken hata: {e}")
 
-# ─────────────────────────────────────────────
-# KURUM DIŞI KAMU İŞÇİ ALIMI (GET İSTEĞİ)
-# ─────────────────────────────────────────────
-def kurumdisi_cek(il_adi, il_kisa, il_url):
-    ilanlar = []
-    url = f"https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/?idId={il_kisa}&il={il_url}"
+
+def kisa_hash(metin):
+    # Metindeki tüm boşlukları temizleyip hash alarak stabilite sağlar
+    temiz_metin = "".join(metin.split())
+    return hashlib.md5(temiz_metin.encode('utf-8')).hexdigest()[:12]
+
+
+def session_ac():
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    return s
+
+
+def viewstate_al(session, url):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
+        r = session.get(url, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
-        for a in soup.find_all("a", href=True):
-            if "kurumdisi-kamu-isci-alim-ilanlari" in a["href"]:
-                parts = a["href"].rstrip("/").split("/")
-                raw_id = parts[-1].split("?")[0]
-                metin = a.get_text(strip=True)
-                if is_valid_job_id(raw_id) and len(metin) > 3:
-                    ilanlar.append({
-                        "id": id_temizle(raw_id),
-                        "baslik": metin[:300],
-                        "kaynak": f"Kurum Dışı Kamu-{il_adi}"
-                    })
+        data = {}
+        for inp in soup.find_all("input", {"type": "hidden"}):
+            name = inp.get("name")
+            if name:
+                data[name] = inp.get("value", "")
+        return data, soup, r.cookies
     except Exception as e:
-        log.warning(f"[Kurum Dışı-{il_adi}] Hata: {e}")
+        log.warning(f"ViewState alınamadı: {e}")
+        return {}, None, None
+
+
+def il_kodu_bul(soup, il_adi):
+    for sel in soup.find_all("select"):
+        sel_id = sel.get("id", "") + sel.get("name", "")
+        if "il" in sel_id.lower() and "ilce" not in sel_id.lower():
+            for opt in sel.find_all("option"):
+                if il_adi.upper() in opt.text.strip().upper():
+                    return sel.get("name") or sel.get("id"), opt.get("value", "")
+    return None, None
+
+
+def grid_satirlari_oku(soup, kaynak):
+    ilanlar = []
+    for tablo in soup.find_all("table"):
+        tablo_id = tablo.get("id", "")
+        if "grid" not in tablo_id.lower() and "Grid" not in tablo_id:
+            continue
+        satirlar = tablo.find_all("tr")
+        if len(satirlar) < 2:
+            continue
+        for satir in satirlar[1:]:
+            hucreler = satir.find_all("td")
+            if len(hucreler) < 2:
+                continue
+            metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
+            if metin and len(metin) > 5:
+                ilan_id = hucreler[0].get_text(strip=True)
+                if not ilan_id or len(ilan_id) < 2:
+                    ilan_id = kisa_hash(metin)
+                
+                ilanlar.append({
+                    "id": ilan_id,
+                    "baslik": metin[:400],
+                    "kaynak": kaynak
+                })
     return ilanlar
 
-# ─────────────────────────────────────────────
-# AÇIK İŞ İLANLARI (POSTBACK SİMÜLASYONU)
-# ─────────────────────────────────────────────
-def acik_is_cek(il_adi, il_kod):
+
+def ara_buton_adi(soup):
+    for inp in soup.find_all("input", {"type": ["submit", "button", "image"]}):
+        val = inp.get("value", "")
+        name = inp.get("name", "")
+        if "Ara" in val or "Search" in name or "Ara" in name:
+            return name
+    return None
+
+
+# ──────────────────────────────────────────────────────
+# 1) TYP — her il için (Harf Duyarlılığı Kaldırıldı)
+# ──────────────────────────────────────────────────────
+def typ_cek(il_adi, il_kisa, il_url):
+    ilanlar = []
+    url = "https://esube.iskur.gov.tr/Typ/TypArama.aspx"
+    try:
+        session = session_ac()
+        data, soup, cookies = viewstate_al(session, url)
+        if not soup:
+            return ilanlar
+
+        for sel in soup.find_all("select"):
+            for opt in sel.find_all("option"):
+                if il_adi.upper() in opt.text.strip().upper():
+                    field_name = sel.get("name") or sel.get("id")
+                    if field_name:
+                        data[field_name] = opt.get("value", "")
+                    break
+
+        data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
+        data["__EVENTARGUMENT"] = ""
+
+        r = session.post(url, data=data, timeout=15, cookies=cookies)
+        soup2 = BeautifulSoup(r.text, "html.parser")
+        ilanlar = grid_satirlari_oku(soup2, f"TYP-{il_adi}")
+        log.info(f"[TYP-{il_adi}] {len(ilanlar)} ilan")
+    except Exception as e:
+        log.warning(f"[TYP-{il_adi}] Hata: {e}")
+    return ilanlar
+
+
+# ──────────────────────────────────────────────────────
+# 2) IUP — her il için (Harf Duyarlılığı Kaldırıldı)
+# ──────────────────────────────────────────────────────
+def iup_cek(il_adi, il_kisa, il_url):
+    ilanlar = []
+    url = "https://esube.iskur.gov.tr/Istihdam/IstIupArama.aspx"
+    try:
+        session = session_ac()
+        data, soup, cookies = viewstate_al(session, url)
+        if not soup:
+            return ilanlar
+
+        for sel in soup.find_all("select"):
+            for opt in sel.find_all("option"):
+                if il_adi.upper() in opt.text.strip().upper():
+                    field_name = sel.get("name") or sel.get("id")
+                    if field_name:
+                        data[field_name] = opt.get("value", "")
+                    break
+
+        for sel in soup.find_all("select"):
+            for opt in sel.find_all("option"):
+                if "İUP" in opt.text.upper() or "IUP" in opt.text.upper():
+                    field_name = sel.get("name") or sel.get("id")
+                    if field_name:
+                        data[field_name] = opt.get("value", "")
+                    break
+
+        data["__EVENTTARGET"] = "ctl05$ctlCommandIupKayit$CommandItem_Search"
+        data["__EVENTARGUMENT"] = ""
+
+        r = session.post(url, data=data, timeout=15, cookies=cookies)
+        soup2 = BeautifulSoup(r.text, "html.parser")
+
+        GECERSIZ = {"ara", "temizle", "ara | temizle", "search", "reset", "sec", "seç", ""}
+        for tablo in soup2.find_all("table"):
+            satirlar = tablo.find_all("tr")
+            if len(satirlar) < 2:
+                continue
+            for satir in satirlar[1:]:
+                hucreler = satir.find_all("td")
+                if len(hucreler) < 2:
+                    continue
+                ilan_no = ""
+                for hucre in hucreler:
+                    val = hucre.get_text(strip=True)
+                    if val.isdigit():
+                        ilan_no = val
+                        break
+                if not ilan_no:
+                    continue
+                metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True) and h.get_text(strip=True).lower() not in GECERSIZ)
+                if metin:
+                    ilanlar.append({
+                        "id": ilan_no,
+                        "baslik": metin[:400],
+                        "kaynak": f"IUP-{il_adi}"
+                    })
+        log.info(f"[IUP-{il_adi}] {len(ilanlar)} ilan")
+    except Exception as e:
+        log.warning(f"[IUP-{il_adi}] Hata: {e}")
+    return ilanlar
+
+
+# ──────────────────────────────────────────────────────
+# 3) Gençlik — her il için
+# ──────────────────────────────────────────────────────
+def genclik_cek(il_adi, il_kisa, il_url):
+    ilanlar = []
+    url = "https://esube.iskur.gov.tr/Istihdam/IstIskurGenclikProgramArama.aspx"
+    try:
+        session = session_ac()
+        data, soup, cookies = viewstate_al(session, url)
+        if not soup:
+            return ilanlar
+
+        il_field, il_val = il_kodu_bul(soup, il_adi)
+        if il_field:
+            data[il_field] = il_val
+
+        btn = ara_buton_adi(soup)
+        if btn:
+            data[btn] = "Ara"
+
+        r = session.post(url, data=data, timeout=15, cookies=cookies)
+        soup2 = BeautifulSoup(r.text, "html.parser")
+        ilanlar = grid_satirlari_oku(soup2, f"Gençlik-{il_adi}")
+        log.info(f"[Gençlik-{il_adi}] {len(ilanlar)} ilan")
+    except Exception as e:
+        log.warning(f"[Gençlik-{il_adi}] Hata: {e}")
+    return ilanlar
+
+
+# ──────────────────────────────────────────────────────
+# 4) Açık İş (Kamu) — her il için
+# ──────────────────────────────────────────────────────
+def acik_is_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/AcikIsIlanAra.aspx"
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    
     try:
-        # 1. Ana Sayfayı Çek
-        r1 = session.get(url, timeout=15)
-        soup1 = BeautifulSoup(r1.text, "html.parser")
-        
-        # Hidden input alanlarını topla
-        data = {inp.get("name"): inp.get("value", "") for inp in soup1.find_all("input", {"type": "hidden"}) if inp.get("name")}
-        
-        # İl Seçim Parametresini ve Arama Butonunu Ayarla
-        data["ctl00$ContentPlaceHolder1$ddlIl"] = il_kod
-        data["ctl00$ContentPlaceHolder1$btnAra"] = "Ara"
-        
-        # 2. Arama POST İsteği Gönder
-        session.headers.update({"Referer": url})
-        r2 = session.post(url, data=data, timeout=15)
-        
-        # Regex ile sayfadaki tüm İlan Numaralarını Yakala
-        matches = re.findall(r'IlanId=(\d+)', r2.text)
-        for i_id in set(matches):
-            if is_valid_job_id(i_id):
-                ilanlar.append({
-                    "id": id_temizle(i_id),
-                    "baslik": f"{il_adi} İŞKUR Açık İş İlanı No: {i_id}",
-                    "kaynak": f"Açık İş-{il_adi}"
-                })
+        session = session_ac()
+        data, soup, cookies = viewstate_al(session, url)
+        if not soup:
+            return ilanlar
+
+        for inp in soup.find_all("input", {"type": "radio"}):
+            label = inp.find_next("label")
+            label_text = label.get_text(strip=True) if label else ""
+            if "Kamu" in label_text or "KAMU" in label_text:
+                data[inp.get("name")] = inp.get("value", "")
+                break
+
+        il_field, il_val = il_kodu_bul(soup, il_adi)
+        if il_field:
+            data[il_field] = il_val
+
+        btn = ara_buton_adi(soup)
+        if btn:
+            data[btn] = "Ara"
+
+        r = session.post(url, data=data, timeout=15, cookies=cookies)
+        soup2 = BeautifulSoup(r.text, "html.parser")
+        ilanlar = grid_satirlari_oku(soup2, f"Açık İş (Kamu)-{il_adi}")
+        log.info(f"[Açık İş-{il_adi}] {len(ilanlar)} ilan")
     except Exception as e:
         log.warning(f"[Açık İş-{il_adi}] Hata: {e}")
     return ilanlar
 
-# ─────────────────────────────────────────────
-# ANA DÖNGÜ
-# ─────────────────────────────────────────────
-async def main():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    gorulmus = gorulmus_yukle()
-    tum_ilanlar = []
 
-    for il_adi, il_kod, il_kisa, il_url in ILLER:
-        tum_ilanlar += kurumdisi_cek(il_adi, il_kisa, il_url)
-        tum_ilanlar += acik_is_cek(il_adi, il_kod)
+# ──────────────────────────────────────────────────────
+# 5) Kurum Dışı Kamu — her il için
+# ──────────────────────────────────────────────────────
+def kurumdisi_cek(il_adi, il_kisa, il_url):
+    ilanlar = []
+    url = f"https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/?idId={il_kisa}&il={il_url}"
+    try:
+        session = session_ac()
+        r = session.get(url, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
 
-    tekil_list = []
-    eklenen = set()
-    for item in tum_ilanlar:
-        if item["id"] not in eklenen:
-            eklenen.add(item["id"])
-            tekil_list.append(item)
+        for tablo in soup.find_all("table"):
+            satirlar = tablo.find_all("tr")
+            if len(satirlar) < 2:
+                continue
+            baslik = satirlar[0].get_text(strip=True).upper()
+            if any(k in baslik for k in ["İLAN", "KURUM", "TARİH", "BAŞVURU", "NO"]):
+                for satir in satirlar[1:]:
+                    hucreler = satir.find_all("td")
+                    if len(hucreler) >= 2:
+                        metin = " | ".join(h.get_text(strip=True) for h in hucreler if h.get_text(strip=True))
+                        if metin:
+                            ilan_id = hucreler[0].get_text(strip=True)
+                            if not ilan_id or len(ilan_id) < 2:
+                                ilan_id = kisa_hash(metin)
+                            
+                            ilanlar.append({
+                                "id": ilan_id,
+                                "baslik": metin[:400],
+                                "kaynak": f"Kurum Dışı-{il_adi}"
+                            })
+                break
 
+        if not ilanlar:
+            for css in ["article", ".list-item", ".ilan-item"]:
+                for el in soup.select(css):
+                    metin = el.get_text(strip=True)
+                    if metin and len(metin) > 20:
+                        ilanlar.append({
+                            "id": kisa_hash(metin),
+                            "baslik": metin[:400],
+                            "kaynak": f"Kurum Dışı-{il_adi}"
+                        })
+
+        log.info(f"[Kurum Dışı-{il_adi}] {len(ilanlar)} ilan")
+    except Exception as e:
+        log.warning(f"[Kurum Dışı-{il_adi}] Hata: {e}")
+    return ilanlar
+
+
+# ──────────────────────────────────────────────────────
+# Bildirim
+# ──────────────────────────────────────────────────────
+async def bildirim_gonder(bot, ilan):
+    mesaj = (
+        f"🔔 *YENİ İŞKUR İLANI*\n\n"
+        f"📋 *Kaynak:* {ilan['kaynak']}\n"
+        f"📌 *Detay:* {ilan['baslik']}\n"
+        f"🕐 *Tespit:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+    )
+    await bot.send_message(
+        chat_id=TELEGRAM_CHAT_ID,
+        text=mesaj,
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+# ──────────────────────────────────────────────────────
+# Ana kontrol
+# ──────────────────────────────────────────────────────
+async def kontrol_et(bot, gorulmus):
+    log.info("── Kontrol başlıyor ──")
     yeni = 0
-    for ilan in tekil_list:
-        i_id = ilan["id"]
-        if i_id not in gorulmus:
-            gorulmus[i_id] = {
-                "tarih": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "kaynak": ilan["kaynak"]
-            }
+
+    tum_ilanlar = []
+    for il_adi, il_kisa, il_url in ILLER:
+        tum_ilanlar += typ_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += iup_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += genclik_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += acik_is_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += kurumdisi_cek(il_adi, il_kisa, il_url)
+
+    for ilan in tum_ilanlar:
+        if not ilan.get("id"):
+            continue
+        anahtar = f"{ilan['kaynak']}::{ilan['id']}"
+        if anahtar not in gorulmus:
+            # Önce hafızaya ve anında diske kaydet
+            gorulmus[anahtar] = True
             gorulmus_kaydet(gorulmus)
             
+            yeni += 1
+            log.info(f"YENİ → {anahtar}")
             try:
-                mesaj = f"🔔 *YENİ İŞKUR İLANI*\n\n📋 *Kaynak:* {ilan['kaynak']}\n📌 *Detay:* {ilan['baslik']}"
-                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
-                await asyncio.sleep(1)
-                yeni += 1
+                await bildirim_gonder(bot, ilan)
+                await asyncio.sleep(1.5)  # Telegram API sınırına takılmamak için hafif bekleme
             except Exception as e:
-                log.error(f"Bildirim hatası ({i_id}): {e}")
+                log.error(f"Bildirim hatası: {e}")
 
-    log.info(f"İşlem tamamlandı. Yeni bildirilen: {yeni} | Toplam Hafıza: {len(gorulmus)}")
+    log.info(f"Tamamlandı. Yeni: {yeni} | Toplam: {len(gorulmus)}")
+
+
+async def main():
+    bot = Bot(token=TELEGRAM_TOKEN)
+    me = await bot.get_me()
+    log.info(f"Bot bağlandı: @{me.username}")
+
+    gorulmus = gorulmus_yukle()
+
+    while True:
+        try:
+            await kontrol_et(bot, gorulmus)
+        except Exception as e:
+            log.error(f"Hata: {e}")
+        await asyncio.sleep(KONTROL_SURESI)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
