@@ -10,12 +10,13 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 # ─────────────────────────────────────────────
-# AYARLAR
+# AYARLAR (MUTLAK DOSYA YOLLARI)
 # ─────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8650054825:AAE9_yjdgQ6jujUUSFkD71_ptZaEONbON1I")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "495947944")
 
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+# Alwaysdata cron ortamı için kesin mutlak yol tanımı:
+BASE_DIR      = "/home/isk73"
 KAYIT_DOSYASI = os.path.join(BASE_DIR, "gorulmus_ilanlar.json")
 
 ILLER = [
@@ -42,23 +43,14 @@ HEADERS = {
 }
 
 # ─────────────────────────────────────────────
-# FİLTRE VE YARDIMCI FONKSİYONLAR
+# GÜVENLİ HAFIZA YÖNETİMİ
 # ─────────────────────────────────────────────
 def is_valid_job_id(raw_id):
-    """
-    Sayı dizisinin geçerli bir ilan ID'si mi yoksa tarih/çöp veri mi olduğunu denetler.
-    İUP ve TYP ilanlarında 3 haneli numaralar da bulunabilir.
-    """
     if not raw_id:
         return False
     clean = str(raw_id).strip().lstrip("0")
-    if not clean or len(clean) < 3 or len(clean) > 12:
+    if not clean or len(clean) < 6 or len(clean) > 12:
         return False
-    
-    # YYYYMMDD Tarih Filtresi (örn: 20230320, 20240404, 20260808)
-    if len(clean) == 8 and clean.startswith(("201", "202", "203")):
-        return False
-
     return True
 
 def id_temizle(raw_id):
@@ -68,20 +60,26 @@ def gorulmus_yukle():
     if os.path.exists(KAYIT_DOSYASI):
         try:
             with open(KAYIT_DOSYASI, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                log.info(f"Hafıza başarıyla yüklendi. Kayıtlı ilan sayısı: {len(data)}")
+                return data
         except Exception as e:
-            log.error(f"Kayıt dosyası okuma hatası: {e}")
+            log.error(f"Hafıza dosyası okunamadı: {e}")
             return {}
+    log.warning(f"Hafıza dosyası bulunamadı, yeni oluşturulacak: {KAYIT_DOSYASI}")
     return {}
 
 def gorulmus_kaydet(veri):
+    # Atomik yazma: Önce geçici dosyaya yazıp sonra değiştiriyoruz (Dosya bozulmasını önler)
+    gecici_dosya = KAYIT_DOSYASI + ".tmp"
     try:
-        with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
+        with open(gecici_dosya, "w", encoding="utf-8") as f:
             json.dump(veri, f, ensure_ascii=False, indent=2)
             f.flush()
-            os.fdatasync(f.fileno())
+            os.fsync(f.fileno())
+        os.replace(gecici_dosya, KAYIT_DOSYASI)
     except Exception as e:
-        log.error(f"Kayıt dosyası yazma hatası: {e}")
+        log.error(f"Hafıza dosyası yazma hatası: {e}")
 
 def tr_norm(metin):
     if not metin: return ""
@@ -129,23 +127,22 @@ def typ_cek(il_adi, il_kisa, il_url):
         session = session_ac()
         data, soup, cookies = viewstate_al(session, url)
         if not soup: return ilanlar
-        
-        il_field, il_val = il_kodu_bul(soup, il_adi)
-        if il_field and il_val:
-            data[il_field] = il_val
-        
+        for sel in soup.find_all("select"):
+            for opt in sel.find_all("option"):
+                if tr_norm(il_adi) in tr_norm(opt.text.strip()):
+                    data[sel.get("name") or sel.get("id")] = opt.get("value", "")
         data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-
         for tablo in soup2.find_all("table"):
             for satir in tablo.find_all("tr")[1:]:
                 st = satir.get_text(separator=" ", strip=True)
                 if metin_gecerli_mi(st):
-                    for cand in re.findall(r'\b\d{3,12}\b', st):
-                        if is_valid_job_id(cand):
-                            ilanlar.append({"id": id_temizle(cand), "baslik": st[:300], "kaynak": f"TYP-{il_adi}"})
-                            break
+                    link = satir.find("a", href=True)
+                    if link:
+                        m = re.search(r'\b\d{6,12}\b', link['href'] + " " + link.get_text())
+                        if m and is_valid_job_id(m.group(0)):
+                            ilanlar.append({"id": id_temizle(m.group(0)), "baslik": st[:300], "kaynak": f"TYP-{il_adi}"})
     except Exception as e:
         log.warning(f"[TYP-{il_adi}] Hata: {e}")
     return ilanlar
@@ -157,38 +154,22 @@ def iup_cek(il_adi, il_kisa, il_url):
         session = session_ac()
         data, soup, cookies = viewstate_al(session, url)
         if not soup: return ilanlar
-        
-        il_field, il_val = il_kodu_bul(soup, il_adi)
-        if il_field and il_val:
-            data[il_field] = il_val
-        
+        for sel in soup.find_all("select"):
+            for opt in sel.find_all("option"):
+                if tr_norm(il_adi) in tr_norm(opt.text.strip()):
+                    data[sel.get("name") or sel.get("id")] = opt.get("value", "")
         data["__EVENTTARGET"] = "ctl05$ctlCommandIupKayit$CommandItem_Search"
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        
         for tablo in soup2.find_all("table"):
             for satir in tablo.find_all("tr")[1:]:
                 st = satir.get_text(separator=" ", strip=True)
-                if not metin_gecerli_mi(st):
-                    continue
-                
-                ilan_no = ""
-                # 1. Tıklanabilir linkten ID arama
-                for a in satir.find_all("a"):
-                    m_link = re.search(r'\b\d{3,12}\b', a.get('href', '') + " " + a.get_text())
-                    if m_link and is_valid_job_id(m_link.group(0)):
-                        ilan_no = id_temizle(m_link.group(0))
-                        break
-                
-                # 2. Metin içinde ID arama
-                if not ilan_no:
-                    for cand in re.findall(r'\b\d{3,12}\b', st):
-                        if is_valid_job_id(cand):
-                            ilan_no = id_temizle(cand)
-                            break
-                            
-                if ilan_no:
-                    ilanlar.append({"id": ilan_no, "baslik": st[:300], "kaynak": f"IUP-{il_adi}"})
+                if metin_gecerli_mi(st):
+                    link = satir.find("a", href=True)
+                    if link:
+                        m = re.search(r'\b\d{6,12}\b', link['href'] + " " + link.get_text())
+                        if m and is_valid_job_id(m.group(0)):
+                            ilanlar.append({"id": id_temizle(m.group(0)), "baslik": st[:300], "kaynak": f"IUP-{il_adi}"})
     except Exception as e:
         log.warning(f"[IUP-{il_adi}] Hata: {e}")
     return ilanlar
@@ -200,23 +181,20 @@ def genclik_cek(il_adi, il_kisa, il_url):
         session = session_ac()
         data, soup, cookies = viewstate_al(session, url)
         if not soup: return ilanlar
-        
         il_field, il_val = il_kodu_bul(soup, il_adi)
-        if il_field and il_val:
-            data[il_field] = il_val
-            
+        if il_field: data[il_field] = il_val
         data["__EVENTTARGET"] = "ctl05$ctlCommandGenclikKayit$CommandItem_Search"
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
-        
         for tablo in soup2.find_all("table"):
             for satir in tablo.find_all("tr")[1:]:
                 st = satir.get_text(separator=" ", strip=True)
                 if metin_gecerli_mi(st):
-                    for cand in re.findall(r'\b\d{3,12}\b', st):
-                        if is_valid_job_id(cand):
-                            ilanlar.append({"id": id_temizle(cand), "baslik": st[:300], "kaynak": f"Gençlik-{il_adi}"})
-                            break
+                    link = satir.find("a", href=True)
+                    if link:
+                        m = re.search(r'\b\d{6,12}\b', link['href'] + " " + link.get_text())
+                        if m and is_valid_job_id(m.group(0)):
+                            ilanlar.append({"id": id_temizle(m.group(0)), "baslik": st[:300], "kaynak": f"Gençlik-{il_adi}"})
     except Exception as e:
         log.warning(f"[Gençlik-{il_adi}] Hata: {e}")
     return ilanlar
@@ -228,15 +206,10 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         session = session_ac()
         data, soup, cookies = viewstate_al(session, url)
         if not soup: return ilanlar
-        
         il_field, il_val = il_kodu_bul(soup, il_adi)
-        if il_field and il_val:
-            data[il_field] = il_val
-            
+        if il_field: data[il_field] = il_val
         for rad in soup.find_all("input", {"type": "radio"}):
-            if "isyeri" in rad.get("name", "").lower():
-                data[rad.get("name")] = "1"
-                
+            if "isyeri" in rad.get("name", "").lower(): data[rad.get("name")] = "1"
         data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand_CommandItem_Search"
         r = session.post(url, data=data, timeout=15, cookies=cookies)
         soup2 = BeautifulSoup(r.text, "html.parser")
@@ -244,25 +217,20 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         for tablo in soup2.find_all("table"):
             for satir in tablo.find_all("tr")[1:]:
                 hucreler = satir.find_all("td")
-                if not hucreler:
-                    continue
-                
+                if not hucreler: continue
                 st = satir.get_text(separator=" ", strip=True)
-                if not metin_gecerli_mi(st):
-                    continue
+                if not metin_gecerli_mi(st): continue
                 
                 ilan_no = ""
-                # 1. Tıklanabilir linkten ID çekme
                 link = satir.find("a", href=True)
                 if link:
-                    m = re.search(r'\b\d{3,12}\b', link['href'] + " " + link.get_text())
+                    m = re.search(r'\b\d{6,12}\b', link['href'] + " " + link.get_text())
                     if m and is_valid_job_id(m.group(0)):
                         ilan_no = id_temizle(m.group(0))
                 
-                # 2. İlk 2 hücre içinden ID çekme
                 if not ilan_no and len(hucreler) >= 2:
                     ilk_hucreler = hucreler[0].get_text() + " " + hucreler[1].get_text()
-                    m = re.search(r'\b\d{3,12}\b', ilk_hucreler)
+                    m = re.search(r'\b\d{6,12}\b', ilk_hucreler)
                     if m and is_valid_job_id(m.group(0)):
                         ilan_no = id_temizle(m.group(0))
 
@@ -319,22 +287,24 @@ async def main():
     for ilan in tekil_döngü:
         ilan_id = ilan["id"]
         if ilan_id not in gorulmus:
+            # 1. RAM'e ekle
             gorulmus[ilan_id] = {
                 "tarih": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "kaynak": ilan["kaynak"]
             }
+            # 2. Anında diske atomik yaz
             gorulmus_kaydet(gorulmus)
             
-            log.info(f"YENİ İLAN: {ilan_id} ({ilan['kaynak']})")
+            log.info(f"YENİ İLAN BİLDİRİLİYOR: {ilan_id} ({ilan['kaynak']})")
             try:
                 mesaj = f"🔔 *YENİ İŞKUR İLANI*\n\n📋 *Kaynak:* {ilan['kaynak']}\n📌 *Detay:* {ilan['baslik']}"
                 await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=mesaj, parse_mode=ParseMode.MARKDOWN)
                 await asyncio.sleep(1)
                 yeni += 1
             except Exception as e:
-                log.error(f"Bildirim atma hatası ({ilan_id}): {e}")
+                log.error(f"Bildirim hatası ({ilan_id}): {e}")
     
-    log.info(f"İşlem tamamlandı. Yeni bulunan: {yeni} | Toplam Hafıza: {len(gorulmus)}")
+    log.info(f"İşlem tamamlandı. Yeni bildirilen: {yeni} | Toplam Hafıza: {len(gorulmus)}")
 
 if __name__ == "__main__":
     asyncio.run(main())
