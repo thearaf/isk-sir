@@ -43,9 +43,6 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
-# ─────────────────────────────────────────────
-# YARDIMCI FONKSİYONLAR
-# ─────────────────────────────────────────────
 def is_valid_job_id(raw_id):
     if not raw_id: return False
     clean = str(raw_id).strip().lstrip("0")
@@ -94,7 +91,7 @@ def viewstate_al(session, url):
         session.headers.update({"Referer": url})
         r = session.get(url, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
-        data = {inp.get("name"): inp.get("value", "") for inp in soup.find_all("input", {"type": "hidden"}) if inp.get("name")}
+        data = {inp.get("name"): inp.get("value", "") for inp in soup.find_all("input") if inp.get("name")}
         return data, soup, r.cookies
     except Exception as e:
         log.warning(f"ViewState hatası ({url}): {e}")
@@ -104,20 +101,28 @@ def il_kodu_bul(soup, il_adi):
     hedef = tr_norm(il_adi)
     for sel in soup.find_all("select"):
         sel_name = sel.get("name", "")
-        # İŞKUR'da il dropdown alanı genelde 'ddlIl' veya 'drpIl' içerir
-        if "il" in sel_name.lower() and "ilce" not in sel_name.lower():
-            for opt in sel.find_all("option"):
-                if hedef in tr_norm(opt.text.strip()):
-                    return sel_name, opt.get("value", "")
+        for opt in sel.find_all("option"):
+            if hedef in tr_norm(opt.text.strip()) and opt.get("value"):
+                return sel_name, opt.get("value")
     return None, None
 
-def metin_gecerli_mi(metin):
-    if not metin or len(metin.strip()) < 8: return False
-    return not any(g in metin.lower() for g in GECERSIZ_METINLER)
+def kurumdisi_cek(il_adi, il_kisa, il_url):
+    ilanlar = []
+    url = f"https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/?idId={il_kisa}&il={il_url}"
+    try:
+        session = session_ac()
+        r = session.get(url, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            if "kurumdisi-kamu-isci-alim-ilanlari" in a["href"]:
+                raw_id = a["href"].split("/")[-1].split("?")[0]
+                metin = a.get_text(strip=True)
+                if is_valid_job_id(raw_id) and len(metin) > 5:
+                    ilanlar.append({"id": id_temizle(raw_id), "baslik": metin[:300], "kaynak": f"Kurum Dışı-{il_adi}"})
+    except Exception as e:
+        log.warning(f"[Kurum Dışı-{il_adi}] Hata: {e}")
+    return ilanlar
 
-# ─────────────────────────────────────────────
-# TARAMA MODÜLLERİ
-# ─────────────────────────────────────────────
 def acik_is_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/AcikIsIlanAra.aspx"
@@ -129,126 +134,30 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         il_field, il_val = il_kodu_bul(soup, il_adi)
         if il_field and il_val:
             data[il_field] = il_val
-        
-        # Arama butonunu tetikleme
-        btn = soup.find("input", {"type": "submit", "value": lambda v: v and "ARA" in v.upper()})
-        if btn and btn.get("name"):
-            data[btn.get("name")] = btn.get("value", "Ara")
-        else:
-            data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand_CommandItem_Search"
+
+        # EventTarget simülasyonu
+        data["__EVENTTARGET"] = il_field if il_field else "ctl04$ctlAcikIsPageCommand_CommandItem_Search"
+        data["__EVENTARGUMENT"] = ""
 
         r = session.post(url, data=data, timeout=15, cookies=cookies)
-        soup2 = BeautifulSoup(r.text, "html.parser")
-
-        for tablo in soup2.find_all("table"):
-            for satir in tablo.find_all("tr")[1:]:
-                hucreler = satir.find_all("td")
-                if not hucreler: continue
-                st = satir.get_text(separator=" ", strip=True)
-                if not metin_gecerli_mi(st): continue
-
-                ilan_no = ""
-                link = satir.find("a", href=True)
-                if link:
-                    m = re.search(r'\b\d{6,12}\b', link['href'] + " " + link.get_text())
-                    if m and is_valid_job_id(m.group(0)):
-                        ilan_no = id_temizle(m.group(0))
-
-                if not ilan_no and len(hucreler) >= 2:
-                    m = re.search(r'\b\d{6,12}\b', hucreler[0].get_text() + " " + hucreler[1].get_text())
-                    if m and is_valid_job_id(m.group(0)):
-                        ilan_no = id_temizle(m.group(0))
-
-                if ilan_no:
-                    ilanlar.append({"id": ilan_no, "baslik": st[:300], "kaynak": f"Açık İş-{il_adi}"})
+        
+        # HTML içindeki tüm ilan linklerini doğrudan Regex ile yakala
+        ids = set(re.findall(r'IlanDetay\.aspx\?IlanId=(\d+)', r.text))
+        for i_id in ids:
+            if is_valid_job_id(i_id):
+                ilanlar.append({"id": id_temizle(i_id), "baslik": f"İŞKUR Açık İş İlanı No: {i_id}", "kaynak": f"Açık İş-{il_adi}"})
     except Exception as e:
         log.warning(f"[Açık İş-{il_adi}] Hata: {e}")
     return ilanlar
 
-def kurumdisi_cek(il_adi, il_kisa, il_url):
-    ilanlar = []
-    # Kurum dışı ilanlar ASP.NET yerine doğrudan GET URL parametresiyle çalışır
-    url = f"https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/?idId={il_kisa}&il={il_url}"
-    try:
-        session = session_ac()
-        r = session.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, "html.parser")
-        for tablo in soup.find_all("table"):
-            for satir in tablo.find_all("tr")[1:]:
-                hucreler = satir.find_all("td")
-                if len(hucreler) >= 2:
-                    link = satir.find("a", href=True)
-                    raw_id = link["href"].split("/")[-1].split("?")[0] if link else ""
-                    metin = " | ".join(h.get_text(strip=True) for h in hucreler)
-                    if is_valid_job_id(raw_id) and metin_gecerli_mi(metin):
-                        ilanlar.append({"id": id_temizle(raw_id), "baslik": metin[:300], "kaynak": f"Kurum Dışı-{il_adi}"})
-    except Exception as e:
-        log.warning(f"[Kurum Dışı-{il_adi}] Hata: {e}")
-    return ilanlar
-
-def typ_cek(il_adi, il_kisa, il_url):
-    ilanlar = []
-    url = "https://esube.iskur.gov.tr/Typ/TypArama.aspx"
-    try:
-        session = session_ac()
-        data, soup, cookies = viewstate_al(session, url)
-        if not soup: return ilanlar
-        il_field, il_val = il_kodu_bul(soup, il_adi)
-        if il_field and il_val: data[il_field] = il_val
-        data["__EVENTTARGET"] = "ctl05$ctlCommandTypKayit$CommandItem_Search"
-        r = session.post(url, data=data, timeout=15, cookies=cookies)
-        soup2 = BeautifulSoup(r.text, "html.parser")
-        for tablo in soup2.find_all("table"):
-            for satir in tablo.find_all("tr")[1:]:
-                st = satir.get_text(separator=" ", strip=True)
-                if metin_gecerli_mi(st):
-                    link = satir.find("a", href=True)
-                    if link:
-                        m = re.search(r'\b\d{6,12}\b', link['href'] + " " + link.get_text())
-                        if m and is_valid_job_id(m.group(0)):
-                            ilanlar.append({"id": id_temizle(m.group(0)), "baslik": st[:300], "kaynak": f"TYP-{il_adi}"})
-    except Exception as e:
-        log.warning(f"[TYP-{il_adi}] Hata: {e}")
-    return ilanlar
-
-def iup_cek(il_adi, il_kisa, il_url):
-    ilanlar = []
-    url = "https://esube.iskur.gov.tr/Istihdam/IstIupArama.aspx"
-    try:
-        session = session_ac()
-        data, soup, cookies = viewstate_al(session, url)
-        if not soup: return ilanlar
-        il_field, il_val = il_kodu_bul(soup, il_adi)
-        if il_field and il_val: data[il_field] = il_val
-        data["__EVENTTARGET"] = "ctl05$ctlCommandIupKayit$CommandItem_Search"
-        r = session.post(url, data=data, timeout=15, cookies=cookies)
-        soup2 = BeautifulSoup(r.text, "html.parser")
-        for tablo in soup2.find_all("table"):
-            for satir in tablo.find_all("tr")[1:]:
-                st = satir.get_text(separator=" ", strip=True)
-                if metin_gecerli_mi(st):
-                    link = satir.find("a", href=True)
-                    if link:
-                        m = re.search(r'\b\d{6,12}\b', link['href'] + " " + link.get_text())
-                        if m and is_valid_job_id(m.group(0)):
-                            ilanlar.append({"id": id_temizle(m.group(0)), "baslik": st[:300], "kaynak": f"IUP-{il_adi}"})
-    except Exception as e:
-        log.warning(f"[IUP-{il_adi}] Hata: {e}")
-    return ilanlar
-
-# ─────────────────────────────────────────────
-# ANA DÖNGÜ
-# ─────────────────────────────────────────────
 async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
     gorulmus = gorulmus_yukle()
     tum_ilanlar = []
 
     for il_adi, il_kisa, il_url in ILLER:
-        tum_ilanlar += acik_is_cek(il_adi, il_kisa, il_url)
         tum_ilanlar += kurumdisi_cek(il_adi, il_kisa, il_url)
-        tum_ilanlar += typ_cek(il_adi, il_kisa, il_url)
-        tum_ilanlar += iup_cek(il_adi, il_kisa, il_url)
+        tum_ilanlar += acik_is_cek(il_adi, il_kisa, il_url)
 
     tekil_list = []
     eklenen = set()
