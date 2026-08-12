@@ -1,6 +1,6 @@
 """
 İŞKUR Çok İl İlan Takip Botu
-Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman
+Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Van
 """
 
 import asyncio
@@ -31,6 +31,7 @@ ILLER = [
     ("SİİRT",      "siirt",      "Siirt"),
     ("HAKKARİ",    "hakkari",    "Hakkari"),
     ("BATMAN",     "batman",     "Batman"),
+    ("VAN",         "van",         "Van"),
 ]
 # ─────────────────────────────────────────────
 
