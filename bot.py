@@ -1,4 +1,4 @@
-cat << 'EOF' > /home/isk73/isk-sir/bot.py
+cat << 'EOF' > /home/isk73/bot.py
 """
 İŞKUR Çok İl İlan Takip Botu
 Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Van, Mersin
@@ -404,12 +404,3 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 EOF
-
-# Dosyayı ana dizine de kopyalayalım
-cp /home/isk73/isk-sir/bot.py /home/isk73/bot.py
-
-# Git reposunu güncelleyelim
-cd /home/isk73/isk-sir
-git add bot.py
-git commit -m "Mersin ve Van eklendi, eksik fonksiyonlar düzeltildi"
-git push
