@@ -1,3 +1,7 @@
+# Oldu ki bozuk dosya kaldıysa tamamen silip sıfırlayalım:
+rm -f /home/isk73/bot.py /home/isk73/isk-sir/bot.py
+
+# Şimdi temiz Python dosyasını oluşturalım:
 cat << 'EOF' > /home/isk73/bot.py
 """
 İŞKUR Çok İl İlan Takip Botu
@@ -404,3 +408,6 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 EOF
+
+# Temiz dosyayı repo klasörüne de kopyalayalım:
+cp /home/isk73/bot.py /home/isk73/isk-sir/bot.py
