@@ -1,6 +1,7 @@
+cat << 'EOF' > /home/isk73/isk-sir/bot.py
 """
 İŞKUR Çok İl İlan Takip Botu
-Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Van
+Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Van, Mersin
 """
 
 import asyncio
@@ -16,12 +17,11 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 # ─────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8650054825:AAE9_yjdgQ6jujUUSFkD71_ptZaEONbON1I")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "495947944")
 KONTROL_SURESI   = 30
 
-# Dosya yolunu bot.py ile aynı klasöre dinamik olarak bağlar
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR      = "/home/isk73"
 KAYIT_DOSYASI = os.path.join(BASE_DIR, "gorulmus_ilanlar.json")
 
 ILLER = [
@@ -31,8 +31,8 @@ ILLER = [
     ("SİİRT",      "siirt",      "Siirt"),
     ("HAKKARİ",    "hakkari",    "Hakkari"),
     ("BATMAN",     "batman",     "Batman"),
-    ("VAN",         "van",         "Van"),
-    ("MERSİN",         "mersin",         "Mersin"),
+    ("VAN",        "van",        "Van"),
+    ("MERSİN",     "mersin",     "Mersin"),
 ]
 # ─────────────────────────────────────────────
 
@@ -52,17 +52,15 @@ HEADERS = {
 }
 
 
-def gorulmus_kaydet(veri):
-    import sqlite3
-    try:
-        conn = sqlite3.connect("/home/isk73/ilanlar.db")
-        conn.execute("CREATE TABLE IF NOT EXISTS gorulmus (anahtar TEXT PRIMARY KEY)")
-        for anahtar in veri:
-            conn.execute("INSERT OR IGNORE INTO gorulmus (anahtar) VALUES (?)", (anahtar,))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        log.error(f"DB yazma hatasi: {e}")
+def gorulmus_yukle():
+    if os.path.exists(KAYIT_DOSYASI):
+        try:
+            with open(KAYIT_DOSYASI, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            log.error(f"Kayıt dosyası okunurken hata: {e}")
+            return {}
+    return {}
 
 
 def gorulmus_kaydet(veri):
@@ -70,13 +68,12 @@ def gorulmus_kaydet(veri):
         with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
             json.dump(veri, f, ensure_ascii=False, indent=2)
             f.flush()
-            os.fsync(f.fileno())  # Veriyi anında diske yazmaya zorlar
+            os.fsync(f.fileno())
     except Exception as e:
         log.error(f"Kayıt dosyasına yazılırken hata: {e}")
 
 
 def kisa_hash(metin):
-    # Metindeki tüm boşlukları temizleyip hash alarak stabilite sağlar
     temiz_metin = "".join(metin.split())
     return hashlib.md5(temiz_metin.encode('utf-8')).hexdigest()[:12]
 
@@ -148,9 +145,6 @@ def ara_buton_adi(soup):
     return None
 
 
-# ──────────────────────────────────────────────────────
-# 1) TYP — her il için (Harf Duyarlılığı Kaldırıldı)
-# ──────────────────────────────────────────────────────
 def typ_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Typ/TypArama.aspx"
@@ -180,9 +174,6 @@ def typ_cek(il_adi, il_kisa, il_url):
     return ilanlar
 
 
-# ──────────────────────────────────────────────────────
-# 2) IUP — her il için (Harf Duyarlılığı Kaldırıldı)
-# ──────────────────────────────────────────────────────
 def iup_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/IstIupArama.aspx"
@@ -244,9 +235,6 @@ def iup_cek(il_adi, il_kisa, il_url):
     return ilanlar
 
 
-# ──────────────────────────────────────────────────────
-# 3) Gençlik — her il için
-# ──────────────────────────────────────────────────────
 def genclik_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/IstIskurGenclikProgramArama.aspx"
@@ -273,9 +261,6 @@ def genclik_cek(il_adi, il_kisa, il_url):
     return ilanlar
 
 
-# ──────────────────────────────────────────────────────
-# 4) Açık İş (Kamu) — her il için
-# ──────────────────────────────────────────────────────
 def acik_is_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = "https://esube.iskur.gov.tr/Istihdam/AcikIsIlanAra.aspx"
@@ -309,9 +294,6 @@ def acik_is_cek(il_adi, il_kisa, il_url):
     return ilanlar
 
 
-# ──────────────────────────────────────────────────────
-# 5) Kurum Dışı Kamu — her il için
-# ──────────────────────────────────────────────────────
 def kurumdisi_cek(il_adi, il_kisa, il_url):
     ilanlar = []
     url = f"https://www.iskur.gov.tr/ilanlar/kurumdisi-kamu-isci-alim-ilanlari/?idId={il_kisa}&il={il_url}"
@@ -359,9 +341,6 @@ def kurumdisi_cek(il_adi, il_kisa, il_url):
     return ilanlar
 
 
-# ──────────────────────────────────────────────────────
-# Bildirim
-# ──────────────────────────────────────────────────────
 async def bildirim_gonder(bot, ilan):
     mesaj = (
         f"🔔 *YENİ İŞKUR İLANI*\n\n"
@@ -376,9 +355,6 @@ async def bildirim_gonder(bot, ilan):
     )
 
 
-# ──────────────────────────────────────────────────────
-# Ana kontrol
-# ──────────────────────────────────────────────────────
 async def kontrol_et(bot, gorulmus):
     log.info("── Kontrol başlıyor ──")
     yeni = 0
@@ -396,7 +372,6 @@ async def kontrol_et(bot, gorulmus):
             continue
         anahtar = f"{ilan['kaynak']}::{ilan['id']}"
         if anahtar not in gorulmus:
-            # Önce hafızaya ve anında diske kaydet
             gorulmus[anahtar] = True
             gorulmus_kaydet(gorulmus)
             
@@ -404,7 +379,7 @@ async def kontrol_et(bot, gorulmus):
             log.info(f"YENİ → {anahtar}")
             try:
                 await bildirim_gonder(bot, ilan)
-                await asyncio.sleep(1.5)  # Telegram API sınırına takılmamak için hafif bekleme
+                await asyncio.sleep(1.5)
             except Exception as e:
                 log.error(f"Bildirim hatası: {e}")
 
@@ -428,3 +403,13 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+EOF
+
+# Dosyayı ana dizine de kopyalayalım
+cp /home/isk73/isk-sir/bot.py /home/isk73/bot.py
+
+# Git reposunu güncelleyelim
+cd /home/isk73/isk-sir
+git add bot.py
+git commit -m "Mersin ve Van eklendi, eksik fonksiyonlar düzeltildi"
+git push
