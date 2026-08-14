@@ -51,15 +51,17 @@ HEADERS = {
 }
 
 
-def gorulmus_yukle():
-    if os.path.exists(KAYIT_DOSYASI):
-        try:
-            with open(KAYIT_DOSYASI, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            log.error(f"Kayıt dosyası okunurken hata: {e}")
-            return {}
-    return {}
+def gorulmus_kaydet(veri):
+    import sqlite3
+    try:
+        conn = sqlite3.connect("/home/isk73/ilanlar.db")
+        conn.execute("CREATE TABLE IF NOT EXISTS gorulmus (anahtar TEXT PRIMARY KEY)")
+        for anahtar in veri:
+            conn.execute("INSERT OR IGNORE INTO gorulmus (anahtar) VALUES (?)", (anahtar,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log.error(f"DB yazma hatasi: {e}")
 
 
 def gorulmus_kaydet(veri):
