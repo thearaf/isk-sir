@@ -32,6 +32,7 @@ ILLER = [
     ("HAKKARİ",    "hakkari",    "Hakkari"),
     ("BATMAN",     "batman",     "Batman"),
     ("VAN",         "van",         "Van"),
+    ("MERSİN",         "mersin",         "Mersin"),
 ]
 # ─────────────────────────────────────────────
 
