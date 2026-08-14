@@ -1,8 +1,8 @@
-# Oldu ki bozuk dosya kaldıysa tamamen silip sıfırlayalım:
-rm -f /home/isk73/bot.py /home/isk73/isk-sir/bot.py
+# 1. Repo klasörüne girin
+cd /home/isk73/isk-sir
 
-# Şimdi temiz Python dosyasını oluşturalım:
-cat << 'EOF' > /home/isk73/bot.py
+# 2. Temiz koda sahip bot.py'yi yazın
+cat << 'EOF' > bot.py
 """
 İŞKUR Çok İl İlan Takip Botu
 Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Van, Mersin
@@ -409,5 +409,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 EOF
 
-# Temiz dosyayı repo klasörüne de kopyalayalım:
-cp /home/isk73/bot.py /home/isk73/isk-sir/bot.py
+# 3. Değişiklikleri Git'e gönderin
+git add bot.py
+git commit -m "Düzeltildi: Syntax hatası kaldırıldı ve Mersin eklendi"
+git push
