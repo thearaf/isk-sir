@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import sqlite3
 import os
 import logging
 import hashlib
@@ -20,7 +21,7 @@ from telegram.constants import ParseMode
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 KONTROL_SURESI   = 120
-KAYIT_DOSYASI    = "/home/isk73/gorulmus_ilanlar.json"
+DB_DOSYASI = "/home/isk73/ilanlar.db"
 
 ILLER = [
     ("ŞIRNAK",     "sirnak",     "%C5%9E%C4%B1rnak"),
@@ -55,25 +56,36 @@ HEADERS = {
 }
 
 
+def db_baglanti():
+    conn = sqlite3.connect(DB_DOSYASI)
+    conn.execute("CREATE TABLE IF NOT EXISTS gorulmus (anahtar TEXT PRIMARY KEY)")
+    conn.commit()
+    return conn
+
+
 def gorulmus_yukle():
-    if os.path.exists(KAYIT_DOSYASI):
-        try:
-            with open(KAYIT_DOSYASI, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            log.error(f"Kayıt dosyası okunurken hata: {e}")
-            return {}
-    return {}
+    try:
+        conn = db_baglanti()
+        rows = conn.execute("SELECT anahtar FROM gorulmus").fetchall()
+        conn.close()
+        return {row[0]: True for row in rows}
+    except Exception as e:
+        log.error(f"DB okuma hatası: {e}")
+        return {}
 
 
 def gorulmus_kaydet(veri):
+    pass  # SQLite ile anlık kaydediliyor
+
+
+def gorulmus_ekle(anahtar):
     try:
-        with open(KAYIT_DOSYASI, "w", encoding="utf-8") as f:
-            json.dump(veri, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
+        conn = db_baglanti()
+        conn.execute("INSERT OR IGNORE INTO gorulmus (anahtar) VALUES (?)", (anahtar,))
+        conn.commit()
+        conn.close()
     except Exception as e:
-        log.error(f"Kayıt dosyasına yazılırken hata: {e}")
+        log.error(f"DB yazma hatası: {e}")
 
 
 def kisa_hash(metin):
@@ -417,7 +429,7 @@ async def kontrol_et(bot, gorulmus):
         anahtar = f"{ilan['kaynak']}::{ilan['id']}"
         if anahtar not in gorulmus:
             gorulmus[anahtar] = True
-            gorulmus_kaydet(gorulmus)
+            gorulmus_ekle(anahtar)
             yeni += 1
             log.info(f"YENİ → {anahtar}")
             try:
