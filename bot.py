@@ -1,10 +1,10 @@
 """
 İŞKUR Çok İl İlan Takip Botu
 Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Gaziantep, Van
+Sadece ilk kez görülen ilanlar için bildirim gönderir.
 """
 
 import asyncio
-import json
 import sqlite3
 import os
 import logging
@@ -57,7 +57,8 @@ HEADERS = {
 
 
 def db_baglanti():
-    conn = sqlite3.connect(DB_DOSYASI)
+    conn = sqlite3.connect(DB_DOSYASI, timeout=15)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("CREATE TABLE IF NOT EXISTS gorulmus (anahtar TEXT PRIMARY KEY)")
     conn.commit()
     return conn
@@ -74,11 +75,7 @@ def gorulmus_yukle():
         return {}
 
 
-def gorulmus_kaydet(veri):
-    pass  # SQLite ile anlık kaydediliyor
-
-
-def gorulmus_ekle(anahtar):
+def gorulmus_ekle(anahtar: str):
     try:
         conn = db_baglanti()
         conn.execute("INSERT OR IGNORE INTO gorulmus (anahtar) VALUES (?)", (anahtar,))
@@ -88,9 +85,12 @@ def gorulmus_ekle(anahtar):
         log.error(f"DB yazma hatası: {e}")
 
 
-def kisa_hash(metin):
-    temiz_metin = "".join(metin.split())
-    return hashlib.md5(temiz_metin.encode('utf-8')).hexdigest()[:12]
+def kisa_hash(metin: str) -> str:
+    """İçeriğin stabil hash'ini üretir"""
+    if not metin:
+        return "bos"
+    temiz = "".join(metin.lower().split())
+    return hashlib.md5(temiz.encode("utf-8")).hexdigest()[:16]
 
 
 def metin_gecerli_mi(metin):
@@ -103,8 +103,8 @@ def tr_norm(metin):
     if not metin:
         return ""
     res = metin.upper()
-    for tr, en in [("İ","I"), ("ı","I"), ("Ş","S"), ("ş","S"), ("Ğ","G"), ("ğ","G"),
-                   ("Ü","U"), ("ü","U"), ("Ö","O"), ("ö","O"), ("Ç","C"), ("ç","C")]:
+    for tr, en in [("İ", "I"), ("ı", "I"), ("Ş", "S"), ("ş", "S"), ("Ğ", "G"), ("ğ", "G"),
+                   ("Ü", "U"), ("ü", "U"), ("Ö", "O"), ("ö", "O"), ("Ç", "C"), ("ç", "C")]:
         res = res.replace(tr, en)
     return res
 
@@ -303,15 +303,12 @@ def acik_is_cek(il_adi, il_kisa, il_url):
         if not soup:
             return ilanlar
 
-        # Kamu radio button
         data["ctl04$IsyeriTuruRadios"] = "kamuRadio"
 
-        # İl seç
         il_field, il_val = il_kodu_bul(soup, il_adi)
         if il_field:
             data[il_field] = il_val
 
-        # Ara tetikleyicisi
         data["__EVENTTARGET"] = "ctl04$ctlAcikIsPageCommand$CommandItem_Search"
         data["__EVENTARGUMENT"] = ""
 
@@ -326,7 +323,6 @@ def acik_is_cek(il_adi, il_kisa, il_url):
                 st = satir.get_text(separator=" ", strip=True)
                 if not metin_gecerli_mi(st):
                     continue
-                # Linkteki ilan ID
                 ilan_no = ""
                 for a in satir.find_all("a", href=True):
                     for cand in re.findall(r'\b\d{8,12}\b', a["href"] + " " + a.get_text()):
@@ -370,7 +366,6 @@ def kurumdisi_cek(il_adi, il_kisa, il_url):
                     hucreler = satir.find_all("td")
                     if len(hucreler) < 2:
                         continue
-                    # PDF linkini ID olarak kullan
                     link = satir.find("a", href=True)
                     ilan_id = ""
                     if link:
@@ -424,21 +419,25 @@ async def kontrol_et(bot, gorulmus):
         tum_ilanlar += kurumdisi_cek(il_adi, il_kisa, il_url)
 
     for ilan in tum_ilanlar:
-        if not ilan.get("id"):
+        if not ilan.get("id") and not ilan.get("baslik"):
             continue
-        anahtar = f"{ilan['kaynak']}::{ilan['id']}"
+
+        # Stabil anahtar: kaynak + id + içerik hash
+        icerik_hash = kisa_hash(ilan.get("baslik", ""))
+        anahtar = f"{ilan['kaynak']}::{ilan.get('id', 'yok')}::{icerik_hash}"
+
         if anahtar not in gorulmus:
             gorulmus[anahtar] = True
             gorulmus_ekle(anahtar)
             yeni += 1
-            log.info(f"YENİ → {anahtar}")
+            log.info(f"YENİ → {anahtar[:90]}...")
             try:
                 await bildirim_gonder(bot, ilan)
                 await asyncio.sleep(1.5)
             except Exception as e:
                 log.error(f"Bildirim hatası: {e}")
 
-    log.info(f"Tamamlandı. Yeni: {yeni} | Toplam: {len(gorulmus)}")
+    log.info(f"Tamamlandı. Yeni: {yeni} | Toplam kayıt: {len(gorulmus)}")
 
 
 async def main():
@@ -447,6 +446,7 @@ async def main():
     log.info(f"Bot bağlandı: @{me.username}")
 
     gorulmus = gorulmus_yukle()
+    log.info(f"Yüklenen görülmüş kayıt sayısı: {len(gorulmus)}")
 
     while True:
         try:
