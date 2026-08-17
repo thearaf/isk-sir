@@ -1,6 +1,6 @@
 """
 İŞKUR Çok İl İlan Takip Botu
-Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Gaziantep, Van
+Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Van
 Sadece ilk kez görülen ilanlar için bildirim gönderir.
 """
 
@@ -30,8 +30,7 @@ ILLER = [
     ("SİİRT",      "siirt",      "Siirt"),
     ("HAKKARİ",    "hakkari",    "Hakkari"),
     ("BATMAN",     "batman",     "Batman"),
-    ("GAZİANTEP",  "gaziantep",  "Gaziantep"),
-    ("VAN",        "van",        "Van"),
+    ("VAN",        "van",        "Van"),    
 ]
 
 GECERSIZ_METINLER = [
