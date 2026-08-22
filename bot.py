@@ -1,7 +1,7 @@
 """
 İŞKUR Çok İl İlan Takip Botu
 Şırnak, Diyarbakır, Mardin, Siirt, Hakkari, Batman, Van
-Sadece ilk kez görülen ilanlar için bildirim gönderir.
+Sadece ilk kez görülen ilanlar için bildirim gönderir + heartbeat
 """
 
 import asyncio
@@ -30,7 +30,7 @@ ILLER = [
     ("SİİRT",      "siirt",      "Siirt"),
     ("HAKKARİ",    "hakkari",    "Hakkari"),
     ("BATMAN",     "batman",     "Batman"),
-    ("VAN",        "van",        "Van"),    
+    ("VAN",        "van",        "Van"),
 ]
 
 GECERSIZ_METINLER = [
@@ -59,6 +59,7 @@ def db_baglanti():
     conn = sqlite3.connect(DB_DOSYASI, timeout=15)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("CREATE TABLE IF NOT EXISTS gorulmus (anahtar TEXT PRIMARY KEY)")
+    conn.execute("CREATE TABLE IF NOT EXISTS heartbeat (id INTEGER PRIMARY KEY CHECK (id = 1), last_run TEXT)")
     conn.commit()
     return conn
 
@@ -84,12 +85,31 @@ def gorulmus_ekle(anahtar: str):
         log.error(f"DB yazma hatası: {e}")
 
 
+def heartbeat_guncelle():
+    """Her başarılı tarama sonrası son çalışma zamanını kaydeder"""
+    try:
+        conn = db_baglanti()
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT OR REPLACE INTO heartbeat (id, last_run) VALUES (1, ?)",
+            (now,)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log.error(f"Heartbeat yazma hatası: {e}")
+
+
 def kisa_hash(metin: str) -> str:
-    """İçeriğin stabil hash'ini üretir"""
     if not metin:
         return "bos"
-    temiz = "".join(metin.lower().split())
-    return hashlib.md5(temiz.encode("utf-8")).hexdigest()[:16]
+    metin = metin.lower()
+    tr_map = str.maketrans("çğıöşü", "cgiosu")
+    metin = metin.translate(tr_map)
+    metin = re.sub(r'\d+', '', metin)
+    metin = re.sub(r'[^\w\s]', ' ', metin)
+    metin = " ".join(metin.split())
+    return hashlib.md5(metin.encode("utf-8")).hexdigest()[:20]
 
 
 def metin_gecerli_mi(metin):
@@ -421,9 +441,8 @@ async def kontrol_et(bot, gorulmus):
         if not ilan.get("id") and not ilan.get("baslik"):
             continue
 
-        # Stabil anahtar: kaynak + id + içerik hash
         icerik_hash = kisa_hash(ilan.get("baslik", ""))
-        anahtar = f"{ilan['kaynak']}::{ilan.get('id', 'yok')}::{icerik_hash}"
+        anahtar = f"{ilan['kaynak']}::{icerik_hash}"
 
         if anahtar not in gorulmus:
             gorulmus[anahtar] = True
@@ -436,6 +455,9 @@ async def kontrol_et(bot, gorulmus):
             except Exception as e:
                 log.error(f"Bildirim hatası: {e}")
 
+    # Her başarılı tarama sonrası heartbeat güncelle
+    heartbeat_guncelle()
+
     log.info(f"Tamamlandı. Yeni: {yeni} | Toplam kayıt: {len(gorulmus)}")
 
 
@@ -443,6 +465,15 @@ async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
     me = await bot.get_me()
     log.info(f"Bot bağlandı: @{me.username}")
+
+    # Başlangıç bildirimi (isteğe bağlı)
+    try:
+        await bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text="🟢 İŞKUR botu başlatıldı ve çalışıyor."
+        )
+    except Exception as e:
+        log.error(f"Başlangıç bildirimi hatası: {e}")
 
     gorulmus = gorulmus_yukle()
     log.info(f"Yüklenen görülmüş kayıt sayısı: {len(gorulmus)}")
